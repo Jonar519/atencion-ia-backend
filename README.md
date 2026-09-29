@@ -11,21 +11,21 @@ resolver (fraude, cliente molesto, pide un humano…) la conversación se escala
 | ---- | ----------------------------------------------------------------------------------------------------------- | --------- |
 | 2    | Identidad del staff, autorización por rol y por dueño, base de conocimiento, conversaciones, observabilidad | ✅        |
 | 3    | IA: proveedor intercambiable (`AI_PROVIDER=mock` por defecto), RAG, intención/sentimiento, escalamiento     | ✅        |
-| 4    | WebSocket de mensajes en tiempo real (el frontend)                                                          | pendiente |
+| 4    | WebSocket de tiempo real (solo recepción), sesión del widget en cookie httpOnly, frontend                   | ✅        |
 | 5    | Voz: señalización WebRTC, STT/TTS (`VOICE_PROVIDER=mock`)                                                   | pendiente |
 
 ## Stack
 
 Node.js 20+ · TypeScript · Express 4 · Prisma 6 (solo como cliente) · PostgreSQL 16 +
-pgvector · Redis 7 (rate limiting; colas BullMQ y pub/sub desde la Fase 3/5) · zod ·
-pino · prom-client · Vitest + supertest.
+pgvector · Redis 7 (rate limiting, colas BullMQ y pub/sub de tiempo real) · zod ·
+pino · prom-client · ws · Vitest + supertest.
 
 ## Relación con los otros repositorios
 
 | Repositorio            | Relación                                                                                                                                                                                                                                                                                                  |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `atencion-ia-database` | Dueño del esquema **y** del `docker-compose.yml` con Postgres (5434) y Redis (6380). Este repo lo **introspecciona** (`npx prisma db pull`); nunca crea ni altera tablas. Los tests aplican sus migraciones desde `../atencion-ia-database/migrations`, así que **las tres carpetas deben ser hermanas**. |
-| `atencion-ia-frontend` | Cliente de esta API (Fase 4).                                                                                                                                                                                                                                                                             |
+| `atencion-ia-frontend` | Cliente de esta API y del WebSocket (Fase 4). Su servidor de Vite reenvía `/api` y `/ws` aquí: mismo origen.                                                                                                                                                                                              |
 
 ## Primera vez (Windows, cmd.exe)
 
@@ -108,28 +108,30 @@ Todas las rutas bajo `/api` exigen `Authorization: Bearer <accessToken>`, salvo
 `/api/auth/login`, `/refresh` y `/logout`. Errores: `{ error, details? }`; los de
 validación traen `details: [{ field, message }]` en español.
 
-| Método y ruta                                                 | Quién                                    | Qué hace                                                                  |
-| ------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
-| `POST /api/auth/login`                                        | público                                  | `{ email, password }` → `{ accessToken, staff }` + cookie de refresh      |
-| `POST /api/auth/refresh`                                      | cookie + `X-Requested-With: atencion-ia` | Rota el refresh y entrega un access token nuevo                           |
-| `POST /api/auth/logout`                                       | cookie + `X-Requested-With: atencion-ia` | Revoca la sesión                                                          |
-| `GET /api/auth/me`                                            | staff                                    | Datos propios                                                             |
-| `PATCH /api/staff/me/availability`                            | staff                                    | `{ availability: offline\|available\|busy\|away }`                        |
-| `GET /api/staff` · `POST /api/staff` · `PATCH /api/staff/:id` | **admin**                                | Gestión de cuentas (política de contraseñas; desactivar cierra sesiones)  |
-| `GET /api/kb/articles` · `GET /api/kb/articles/:id`           | staff                                    | Base de conocimiento (filtros `status`, `category`, `q`; cursor)          |
-| `POST` · `PATCH` · `DELETE /api/kb/articles/:id`              | **admin**                                | Crear/editar/borrar artículos (la versión sube si cambia título o cuerpo) |
-| `GET /api/conversations?scope=mine\|queue\|all`               | staff (`all` solo admin)                 | Listado (cola: por prioridad; resto: por último mensaje, con cursor)      |
-| `GET /api/conversations/:id`                                  | dueño o cola                             | Detalle: cliente, escalamientos, llamadas                                 |
-| `GET /api/conversations/:id/messages`                         | dueño o cola                             | Historial, del más reciente hacia atrás, con cursor                       |
-| `POST /api/conversations/:id/take`                            | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                      |
-| `POST /api/conversations/:id/close`                           | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                            |
-| `POST /api/conversations/:id/messages`                        | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                |
-| `POST /api/widget/sessions`                                   | público (cliente)                        | Sesión anónima: `{ displayName? }` → `{ token: "wgt_…" }`                 |
-| `GET` · `POST /api/widget/conversations`                      | cliente (`Bearer wgt_…`)                 | Sus conversaciones (máx. 3 abiertas)                                      |
-| `GET /api/widget/conversations/:id/messages`                  | el cliente dueño                         | Historial (sin el análisis de IA ni datos internos)                       |
-| `POST /api/widget/conversations/:id/messages`                 | el cliente dueño                         | `{ content, clientMsgId? }` → motor conversacional: respuesta o traspaso  |
-| `GET /health` · `GET /ready`                                  | sondas                                   | Liveness / readiness (Postgres + Redis)                                   |
-| `GET /metrics`                                                | `Bearer METRICS_TOKEN`                   | Prometheus                                                                |
+| Método y ruta                                                 | Quién                                    | Qué hace                                                                                                                                         |
+| ------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /api/auth/login`                                        | público                                  | `{ email, password }` → `{ accessToken, staff }` + cookie de refresh                                                                             |
+| `POST /api/auth/refresh`                                      | cookie + `X-Requested-With: atencion-ia` | Rota el refresh y entrega un access token nuevo                                                                                                  |
+| `POST /api/auth/logout`                                       | cookie + `X-Requested-With: atencion-ia` | Revoca la sesión                                                                                                                                 |
+| `GET /api/auth/me`                                            | staff                                    | Datos propios                                                                                                                                    |
+| `PATCH /api/staff/me/availability`                            | staff                                    | `{ availability: offline\|available\|busy\|away }`                                                                                               |
+| `GET /api/staff` · `POST /api/staff` · `PATCH /api/staff/:id` | **admin**                                | Gestión de cuentas (política de contraseñas; desactivar cierra sesiones)                                                                         |
+| `GET /api/kb/articles` · `GET /api/kb/articles/:id`           | staff                                    | Base de conocimiento (filtros `status`, `category`, `q`; cursor)                                                                                 |
+| `POST` · `PATCH` · `DELETE /api/kb/articles/:id`              | **admin**                                | Crear/editar/borrar artículos (la versión sube si cambia título o cuerpo)                                                                        |
+| `GET /api/conversations?scope=mine\|queue\|all`               | staff (`all` solo admin)                 | Listado (cola: por prioridad; resto: por último mensaje, con cursor)                                                                             |
+| `GET /api/conversations/:id`                                  | dueño o cola                             | Detalle: cliente, escalamientos, llamadas                                                                                                        |
+| `GET /api/conversations/:id/messages`                         | dueño o cola                             | Historial, del más reciente hacia atrás, con cursor                                                                                              |
+| `POST /api/conversations/:id/take`                            | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                                                                                             |
+| `POST /api/conversations/:id/close`                           | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                                                                                                   |
+| `POST /api/conversations/:id/messages`                        | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                                                                                       |
+| `POST /api/widget/sessions`                                   | público (cliente)                        | Sesión anónima `{ displayName? }`. Con `X-Requested-With`: cookie httpOnly y **sin** token en el cuerpo; sin él (API/curl): `{ token: "wgt_…" }` |
+| `GET /api/widget/session` · `POST /api/widget/session/end`    | cliente                                  | Datos de la sesión actual · cerrarla (revoca el token y borra la cookie)                                                                         |
+| `GET` · `POST /api/widget/conversations`                      | cliente (cookie o `Bearer wgt_…`)        | Sus conversaciones (máx. 3 abiertas)                                                                                                             |
+| `GET /api/widget/conversations/:id/messages`                  | el cliente dueño                         | Historial (sin el análisis de IA ni datos internos)                                                                                              |
+| `POST /api/widget/conversations/:id/messages`                 | el cliente dueño                         | `{ content, clientMsgId? }` → motor conversacional: respuesta o traspaso                                                                         |
+| `GET /ws` (upgrade)                                           | staff o cliente                          | Tiempo real, solo recepción (ver abajo)                                                                                                          |
+| `GET /health` · `GET /ready`                                  | sondas                                   | Liveness / readiness (Postgres + Redis)                                                                                                          |
+| `GET /metrics`                                                | `Bearer METRICS_TOKEN`                   | Prometheus                                                                                                                                       |
 
 ### Quién ve qué (autorización por dueño)
 
@@ -140,6 +142,34 @@ Una sola regla en `src/modules/conversations/conversations.access.ts` (ver
 - **agent**: las asignadas a él (en curso o cerradas) y la **cola general** (en espera y
   sin asignar), para leer el historial antes de tomar el caso. No ve las que atiende la
   IA sin escalar ni las de otros agentes: esas responden **404**.
+
+### Sesión del cliente del widget
+
+La sesión es una cookie `atencion_ia_widget` (httpOnly, `SameSite=Strict`, `Path=/`): el token
+`wgt_…` nunca llega al JavaScript del navegador, así que un XSS no puede robarlo. Las escrituras
+autenticadas **por cookie** exigen `X-Requested-With: atencion-ia` (CSRF, como el refresh del
+staff). `Authorization: Bearer wgt_…` sigue funcionando para curl y la demo de la Fase 3. Ver
+[ADR 0009](docs/adr/0009-sesion-del-widget-en-cookie.md).
+
+## Tiempo real (WebSocket `/ws`)
+
+Mismo puerto que la API. **Solo recepción**: enviar sigue siendo por REST (validación,
+idempotencia, rate limit y tope de IA en un solo lugar). Ver
+[ADR 0008](docs/adr/0008-tiempo-real-solo-recepcion.md).
+
+- **Autenticación en el primer mensaje** (`{ "type": "auth", "accessToken" }` para el staff;
+  `{ "type": "auth" }` para el widget, que usa la cookie del upgrade). Nunca en la URL.
+- **Origin** debe estar en `CORS_ORIGIN` (evita cross-site WebSocket hijacking).
+- Cierres: `4401` credencial inválida · `4408` no se autenticó en 5 s · `4409` venció el token o
+  la sesión (el cliente renueva y reconecta) · `4429` más de 20 mensajes en 10 s. Heartbeat cada 30 s.
+- **Quién recibe qué** (`src/realtime/audience.ts`, función pura): el cliente, solo eventos de
+  **sus** conversaciones, sin el análisis de la IA (intención/sentimiento) y con el asesor solo por
+  su nombre de pila; el staff, solo lo que `canViewConversation` le permite. Cuando un caso sale
+  del alcance de un agente (otro lo tomó), le llega `conversation.updated` con `visible: false`.
+- Los eventos se publican **después del commit** en Redis (canal `atencion-ia:realtime`), así
+  varias instancias de la API y el worker entregan a todos los sockets.
+- Lo publicado mientras un cliente estaba desconectado **no** se reenvía: al reconectar, el
+  frontend vuelve a pedir el historial por REST.
 
 ### Rate limiting (Redis)
 
@@ -168,7 +198,7 @@ escalamiento, las capas de aislamiento del RAG, las pruebas de mutación y la ca
 - **Aislamiento del RAG** garantizado también por la base (trigger de la migración 013,
   [ADR 0006](docs/adr/0006-aislamiento-del-rag.md)).
 - **Escalamiento** sin duplicados (índice único parcial + `ON CONFLICT DO NOTHING`), con aviso a
-  los agentes disponibles por Redis pub/sub (canal `atencion-ia:staff-events`).
+  los agentes disponibles por Redis pub/sub (canal `atencion-ia:realtime`).
 
 ## Observabilidad
 
@@ -177,12 +207,12 @@ escalamiento, las capas de aislamiento del RAG, las pruebas de mutación y la ca
   credenciales, cookies, secretos y **el contenido de los mensajes**. En desarrollo se
   ven con colores; en producción, JSON.
 - **Métricas** Prometheus en `/metrics` (con token): duración HTTP por ruta como patrón
-  (nunca ids), eventos de autenticación y de conversaciones, latencia y tokens de IA por
+  (nunca ids), eventos de autenticación y de conversaciones, conexiones WebSocket abiertas por tipo, latencia y tokens de IA por
   proveedor y operación, escalamientos por motivo, similitud del RAG, trabajos por cola.
   El worker expone las suyas en `WORKER_METRICS_PORT`.
 - **Sondas**: `/health` no consulta dependencias; `/ready` sí, y responde 503 durante el
   apagado.
-- **Apagado ordenado** (SIGTERM/SIGINT): readiness 503 → drenaje → cierre HTTP esperando
+- **Apagado ordenado** (SIGTERM/SIGINT): readiness 503 → drenaje → cierre de WebSockets → cierre HTTP esperando
   lo que está en curso → auditoría pendiente → Redis → Postgres. Tiempo máximo
   configurable.
 - **Auditoría** (`audit_log`): login (éxito/fallo/bloqueo), reutilización de refresh,
@@ -196,15 +226,16 @@ npm test
 ```
 
 Recrean una base `atencion_ia_test` aplicando las migraciones **reales** del repo hermano
-(con sus CHECKs e índices parciales). Redis y las colas se simulan. 199 tests en 23 archivos: unitarios (política de
+(con sus CHECKs e índices parciales). Redis y las colas se simulan. 224 tests en 25 archivos: unitarios (política de
 contraseñas, bloqueo, tokens, acceso, versionado de la KB, paginación, redacción de logs,
 apagado, reglas de escalamiento, proveedor mock, adaptadores de Claude y Voyage con clientes
 simulados, prompt injection, fragmentación) y de integración (sesión completa, CSRF, rate limit,
 aislamiento entre agentes y entre clientes, carreras, idempotencia, KB, staff, motor
-conversacional, aislamiento del RAG, indexación, avisos, sondas y métricas).
+conversacional, aislamiento del RAG, indexación, avisos, sondas, métricas, sesión del widget
+por cookie con CSRF y WebSocket real: Origin, autenticación, qué recibe cada destinatario y cierre al vencer).
 
 Además: `npm run test:shuffle` (orden aleatorio: sin dependencias ocultas entre tests) y
-`npm run test:mutations` (13/13 reglas críticas rotas a propósito son detectadas).
+`npm run test:mutations` (22/22 reglas críticas rotas a propósito son detectadas).
 
 ## Probarlo a mano (cmd.exe, con el seed cargado)
 

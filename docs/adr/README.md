@@ -13,5 +13,7 @@ en este proyecto; las nuevas se justifican completas.
 | [0005](0005-proveedor-de-ia-intercambiable.md)               | Proveedor de IA intercambiable (Claude + Voyage), mock determinista por defecto   | Aceptada |
 | [0006](0006-aislamiento-del-rag.md)                          | Aislamiento del RAG garantizado por la base (trigger), la búsqueda y el historial | Aceptada |
 | [0007](0007-motor-conversacional-independiente-del-canal.md) | Un solo motor conversacional para texto y voz                                     | Aceptada |
+| [0008](0008-tiempo-real-solo-recepcion.md)                   | WebSocket solo de recepción; destinatarios decididos por una función pura         | Aceptada |
+| [0009](0009-sesion-del-widget-en-cookie.md)                  | La sesión del cliente del widget vive en una cookie httpOnly                      | Aceptada |
 
 Formato: Contexto · Decisión · Alternativas consideradas · Consecuencias · Evidencia.
