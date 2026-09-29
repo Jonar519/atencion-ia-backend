@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
-import { app, authHeader, freshIp, staffSession, widgetConversation, widgetHeader, widgetSession } from "../helpers";
+import {
+  app,
+  authHeader,
+  csrfHeader,
+  freshIp,
+  staffSession,
+  widgetConversation,
+  widgetHeader,
+  widgetSession,
+} from "../helpers";
 import { prisma } from "../../src/config/prisma";
 import { sha256 } from "../../src/utils/hash";
 
@@ -102,5 +111,64 @@ describe("codificación del texto", () => {
     expect(res.status).toBe(400);
     expect(JSON.stringify(res.body)).toContain("UTF-8");
     expect(await prisma.message.count({ where: { conversationId: id } })).toBe(0);
+  });
+});
+
+describe("sesión del widget en cookie httpOnly (navegador)", () => {
+  async function browserSession() {
+    const res = await request(app)
+      .post("/api/widget/sessions")
+      .set("X-Forwarded-For", freshIp())
+      .set(csrfHeader)
+      .send({ displayName: "Navegador" });
+    const raw = [res.headers["set-cookie"]].flat().find((c) => c?.startsWith("atencion_ia_widget="))!;
+    return { res, raw, cookie: raw.split(";")[0]! };
+  }
+
+  it("la cookie es httpOnly, SameSite=Strict y Path=/; al navegador NO se le devuelve el token", async () => {
+    const { res, raw } = await browserSession();
+    expect(res.status).toBe(201);
+    expect(raw).toMatch(/HttpOnly/i);
+    expect(raw).toMatch(/SameSite=Strict/i);
+    expect(raw).toMatch(/Path=\//i);
+    expect(res.body).not.toHaveProperty("token");
+    expect(JSON.stringify(res.body)).not.toContain("wgt_");
+  });
+
+  it("un cliente de API (sin el encabezado del navegador) sí recibe el token para usarlo como Bearer", async () => {
+    const res = await request(app).post("/api/widget/sessions").set("X-Forwarded-For", freshIp()).send({});
+    expect(res.body.token).toMatch(/^wgt_/);
+  });
+
+  it("con la cookie se puede leer (GET) sin más", async () => {
+    const { cookie } = await browserSession();
+    const res = await request(app).get("/api/widget/session").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ displayName: "Navegador" });
+  });
+
+  it("CSRF: una escritura autenticada SOLO con la cookie exige el encabezado anti-CSRF y un Origin permitido", async () => {
+    const { cookie } = await browserSession();
+    const sinHeader = await request(app).post("/api/widget/conversations").set("Cookie", cookie).send({});
+    expect(sinHeader.status).toBe(403);
+    const otroOrigen = await request(app)
+      .post("/api/widget/conversations")
+      .set("Cookie", cookie)
+      .set(csrfHeader)
+      .set("Origin", "https://sitio-malicioso.example")
+      .send({});
+    expect(otroOrigen.status).toBe(403);
+    const ok = await request(app).post("/api/widget/conversations").set("Cookie", cookie).set(csrfHeader).send({});
+    expect(ok.status).toBe(201);
+  });
+
+  it("terminar la sesión la revoca en la base y borra la cookie", async () => {
+    const { cookie, res } = await browserSession();
+    const end = await request(app).post("/api/widget/session/end").set("Cookie", cookie).set(csrfHeader);
+    expect(end.status).toBe(204);
+    expect([end.headers["set-cookie"]].flat().join()).toMatch(/atencion_ia_widget=;/);
+    expect((await request(app).get("/api/widget/session").set("Cookie", cookie)).status).toBe(401);
+    const session = await prisma.widgetSession.findFirstOrThrow({ where: { customerId: res.body.customerId } });
+    expect(session.revokedAt).not.toBeNull();
   });
 });

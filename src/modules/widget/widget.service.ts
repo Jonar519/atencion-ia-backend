@@ -74,6 +74,18 @@ export const widgetService = {
     });
   },
 
+  async sessionInfo(identity: WidgetIdentity) {
+    const customer = await prisma.customer.findUniqueOrThrow({
+      where: { id: identity.customerId },
+      select: { id: true, displayName: true },
+    });
+    return { customerId: customer.id, displayName: customer.displayName, expiresAt: identity.expiresAt };
+  },
+
+  async endSession(identity: WidgetIdentity) {
+    await prisma.widgetSession.update({ where: { id: identity.sessionId }, data: { revokedAt: new Date() } });
+  },
+
   async listConversations(identity: WidgetIdentity) {
     return prisma.conversation.findMany({
       where: { customerId: identity.customerId },

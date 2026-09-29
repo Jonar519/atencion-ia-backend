@@ -28,6 +28,8 @@ widgetRouter.post(
 );
 
 widgetRouter.use(widgetAuth);
+widgetRouter.get("/session", asyncHandler(widgetController.currentSession));
+widgetRouter.post("/session/end", asyncHandler(widgetController.endSession));
 widgetRouter.get("/conversations", asyncHandler(widgetController.listConversations));
 widgetRouter.post(
   "/conversations",
