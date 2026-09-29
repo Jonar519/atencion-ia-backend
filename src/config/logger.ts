@@ -33,6 +33,10 @@ export const REDACT_PATHS = [
   "*.metricsToken",
   "*.databaseUrl",
   "*.redisUrl",
+  "*.anthropicApiKey",
+  "*.voyageApiKey",
+  "*.apiKey",
+  "apiKey",
 ];
 
 export const logger = pino({

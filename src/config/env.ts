@@ -45,6 +45,30 @@ const schema = z
     METRICS_TOKEN: z.string().optional(),
     SHUTDOWN_TIMEOUT_MS: positiveInt(10_000),
     SHUTDOWN_DRAIN_DELAY_MS: z.coerce.number().int().min(0).default(0),
+
+    // --- IA ---
+    // "mock" (por defecto): determinista, sin costo ni credenciales (desarrollo, tests, CI, carga).
+    // "anthropic": Claude para respuestas e intención + Voyage AI para embeddings.
+    AI_PROVIDER: z.enum(["mock", "anthropic"]).default("mock"),
+    ANTHROPIC_API_KEY: z.string().optional(),
+    VOYAGE_API_KEY: z.string().optional(),
+    ANTHROPIC_MODEL: z.string().min(1).default("claude-opus-5-5"),
+    ANTHROPIC_CLASSIFIER_MODEL: z.string().min(1).default("claude-opus-5-5"),
+    VOYAGE_MODEL: z.string().min(1).default("voyage-3.5"),
+    AI_TIMEOUT_MS: positiveInt(20_000),
+    // Solo con AI_PROVIDER=mock: latencia artificial por llamada (pruebas de carga).
+    AI_MOCK_LATENCY_MS: z.coerce.number().int().min(0).default(0),
+    // RAG: fragmentos por respuesta y similitud coseno mínima para usarlos.
+    // (Los umbrales dependen del modelo de embeddings: ver docs/rag.md.)
+    RAG_TOP_K: z.coerce.number().int().min(1).max(10).default(4),
+    RAG_MIN_SCORE: z.coerce.number().min(-1).max(1).optional(),
+    // Tope diario de tokens de IA por cliente (defensa contra agotar créditos).
+    AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER: positiveInt(60_000),
+    // Vida de la sesión anónima del widget.
+    WIDGET_SESSION_TTL_HOURS: positiveInt(24),
+    // Worker (BullMQ): concurrencia y puerto de sus métricas/sondas.
+    WORKER_CONCURRENCY: positiveInt(2),
+    WORKER_METRICS_PORT: positiveInt(9465),
   })
   .superRefine((value, ctx) => {
     if (value.JWT_SECRET === value.IP_HASH_SECRET) {
@@ -55,6 +79,20 @@ const schema = z
         code: "custom",
         path: ["RATE_LIMIT_SCALE"],
         message: "Es solo para pruebas de carga y no puede usarse con NODE_ENV=production",
+      });
+    }
+    if (value.AI_PROVIDER === "anthropic") {
+      for (const key of ["ANTHROPIC_API_KEY", "VOYAGE_API_KEY"] as const) {
+        if (!value[key]) {
+          ctx.addIssue({ code: "custom", path: [key], message: "Obligatoria con AI_PROVIDER=anthropic" });
+        }
+      }
+    }
+    if (isProduction && value.AI_PROVIDER === "mock") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["AI_PROVIDER"],
+        message: "mock responde con plantillas: no puede usarse con NODE_ENV=production",
       });
     }
     if (value.METRICS_TOKEN && value.METRICS_TOKEN.length < 16) {
@@ -95,4 +133,23 @@ export const env = {
   // Espera entre "/ready = 503" y dejar de aceptar conexiones, para que el
   // balanceador alcance a sacar la instancia. 0 en local.
   shutdownDrainDelayMs: e.SHUTDOWN_DRAIN_DELAY_MS,
+
+  ai: {
+    provider: e.AI_PROVIDER,
+    anthropicApiKey: e.ANTHROPIC_API_KEY,
+    voyageApiKey: e.VOYAGE_API_KEY,
+    chatModel: e.ANTHROPIC_MODEL,
+    classifierModel: e.ANTHROPIC_CLASSIFIER_MODEL,
+    embeddingModel: e.AI_PROVIDER === "mock" ? "mock-embed-v1" : e.VOYAGE_MODEL,
+    timeoutMs: e.AI_TIMEOUT_MS,
+    mockLatencyMs: e.AI_MOCK_LATENCY_MS,
+    ragTopK: e.RAG_TOP_K,
+    // Umbral calibrado por proveedor (docs/rag.md): los embeddings reales y los
+    // del mock (hashing de palabras) no tienen la misma escala de similitud.
+    ragMinScore: e.RAG_MIN_SCORE ?? (e.AI_PROVIDER === "mock" ? 0.2 : 0.45),
+    dailyTokenBudgetPerCustomer: e.AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER,
+  },
+  widgetSessionTtlHours: e.WIDGET_SESSION_TTL_HOURS,
+  workerConcurrency: e.WORKER_CONCURRENCY,
+  workerMetricsPort: e.WORKER_METRICS_PORT,
 };
