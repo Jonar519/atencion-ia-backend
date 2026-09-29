@@ -158,6 +158,7 @@ Una sola regla en `src/modules/conversations/conversations.access.ts` (ver
 
 ## IA: RAG, intención y escalamiento
 
+Demo paso a paso en cmd.exe con los datos del seed: [docs/demo-fase3.md](docs/demo-fase3.md).
 Detalle completo en [docs/rag.md](docs/rag.md): flujo de un turno, las 7 reglas de
 escalamiento, las capas de aislamiento del RAG, las pruebas de mutación y la calibración.
 

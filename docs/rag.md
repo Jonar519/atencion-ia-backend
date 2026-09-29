@@ -22,6 +22,8 @@ worker (npm run worker)
    kb-indexing       → fragmenta + embeddings → kb_chunks (reemplazo atómico, descarta si el artículo cambió)
 ```
 
+> **Demo paso a paso en cmd.exe** con los datos del seed: [demo-fase3.md](demo-fase3.md).
+
 ## Reglas de escalamiento
 
 Función pura `decideEscalation()` (`src/modules/engine/escalationRules.ts`), probada regla por regla.
