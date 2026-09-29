@@ -69,3 +69,26 @@ export const agentMessageLimiter = limiter("agent-msg", MINUTE, 60, "Estás envi
 export const adminWriteLimiter = limiter("admin-write", 15 * MINUTE, 120, "Demasiadas modificaciones seguidas.", {
   keyGenerator: byUser,
 });
+
+/** Sesiones anónimas del widget: por IP, para que un script no cree miles de clientes. */
+export const widgetSessionLimiter = limiter(
+  "widget-session",
+  60 * MINUTE,
+  20,
+  "Demasiadas sesiones nuevas desde tu red."
+);
+
+/**
+ * Mensajes del cliente al asistente: cada uno dispara IA (cuesta dinero).
+ * Por SESIÓN del widget (debe ir después de widgetAuth). El tope diario de
+ * tokens por cliente (engine/budget.service.ts) es la segunda barrera.
+ */
+export const customerAiLimiter = limiter(
+  "customer-ai",
+  MINUTE,
+  12,
+  "Estás escribiendo muy rápido. Espera un momento.",
+  {
+    keyGenerator: (req: Request) => req.widget?.sessionId ?? ipKeyGenerator(req.ip ?? ""),
+  }
+);

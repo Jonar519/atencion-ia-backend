@@ -61,10 +61,15 @@ export function hasForbiddenControlChars(value: string): boolean {
 
 /** Texto libre: sin espacios sobrantes y sin caracteres de control (salvo saltos de línea y tabulaciones). */
 export function cleanText(min: number, max: number) {
-  return z
-    .string()
-    .trim()
-    .min(min)
-    .max(max)
-    .refine((value) => !hasForbiddenControlChars(value), { message: "Contiene caracteres de control no permitidos" });
+  return (
+    z
+      .string()
+      .trim()
+      .min(min)
+      .max(max)
+      .refine((value) => !hasForbiddenControlChars(value), { message: "Contiene caracteres de control no permitidos" })
+      // U+FFFD aparece cuando el cliente envió bytes que no son UTF-8 válido (p. ej. Windows-1252):
+      // mejor un 400 claro que guardar el texto corrompido en silencio.
+      .refine((value) => !value.includes("\uFFFD"), { message: "El texto no es UTF-8 válido (revisa la codificación)" })
+  );
 }

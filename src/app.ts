@@ -9,6 +9,7 @@ import { authRouter } from "./modules/auth/auth.routes";
 import { staffRouter } from "./modules/staff/staff.routes";
 import { kbRouter } from "./modules/kb/kb.routes";
 import { conversationsRouter } from "./modules/conversations/conversations.routes";
+import { widgetRouter } from "./modules/widget/widget.routes";
 import { errorMiddleware, notFoundMiddleware } from "./middlewares/error.middleware";
 import { globalLimiter } from "./middlewares/rateLimit.middleware";
 import { healthHandler, readyHandler } from "./observability/health";
@@ -84,6 +85,7 @@ export function createApp() {
   app.use("/api/staff", staffRouter);
   app.use("/api/kb", kbRouter);
   app.use("/api/conversations", conversationsRouter);
+  app.use("/api/widget", widgetRouter);
 
   app.use(notFoundMiddleware);
   app.use(errorMiddleware);
