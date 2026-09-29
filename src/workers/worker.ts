@@ -11,15 +11,21 @@ import {
   closeQueues,
   ESCALATION_NOTIFY_QUEUE,
   KB_INDEXING_QUEUE,
+  scheduleVoiceMaintenance,
+  VOICE_MAINTENANCE_QUEUE,
   type EscalationNotifyJob,
   type KbIndexingJob,
+  type VoiceMaintenanceJob,
 } from "../queues/queues";
+import { callsService } from "../modules/voice/calls.service";
 import { notifyEscalation } from "./notifyEscalation";
 
 /**
  * Proceso worker (separado de la API): `npm run worker`.
  *  - kb-indexing: embeddings + índice del RAG de un artículo.
  *  - escalation-notify: aviso a los agentes de un escalamiento nuevo.
+ *  - voice-maintenance (programado): cierra llamadas abandonadas y purga
+ *    transcripciones vencidas (docs/privacy-voice.md).
  * Expone GET /health y GET /metrics (con METRICS_TOKEN) en WORKER_METRICS_PORT.
  * Apagado ordenado con SIGTERM/SIGINT: deja de tomar trabajos, termina los
  * que tiene en curso y cierra conexiones.
@@ -50,7 +56,26 @@ const notifyWorker = new Worker<EscalationNotifyJob>(
   workerOptions
 );
 
-for (const worker of [kbWorker, notifyWorker]) {
+const voiceWorker = new Worker<VoiceMaintenanceJob>(
+  VOICE_MAINTENANCE_QUEUE,
+  async (job) => {
+    if (job.name === "sweep") return { ended: await callsService.sweepStale() };
+    let purged = 0;
+    // Por lotes hasta vaciar lo vencido.
+    for (
+      let batch = await callsService.purgeExpiredTranscripts();
+      batch > 0;
+      batch = await callsService.purgeExpiredTranscripts()
+    ) {
+      purged += batch;
+    }
+    if (purged) logger.info({ purged }, "Transcripciones purgadas por retención");
+    return { purged };
+  },
+  { connection: redisConnection, concurrency: 1 }
+);
+
+for (const worker of [kbWorker, notifyWorker, voiceWorker]) {
   worker.on("failed", (job, err) =>
     logger.warn(
       { queue: worker.name, jobId: job?.id, attempts: job?.attemptsMade, err: err.message },
@@ -80,7 +105,7 @@ const shutdown = createGracefulShutdown(
   [
     {
       name: "workers (terminan lo que tienen en curso)",
-      run: () => Promise.all([kbWorker.close(), notifyWorker.close()]),
+      run: () => Promise.all([kbWorker.close(), notifyWorker.close(), voiceWorker.close()]),
     },
     { name: "colas", run: () => closeQueues() },
     { name: "servidor de métricas", run: () => closeHttpServer(server) },
@@ -91,5 +116,12 @@ const shutdown = createGracefulShutdown(
 );
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+scheduleVoiceMaintenance().catch((err: unknown) =>
+  logger.error(
+    { err: err instanceof Error ? err.message : String(err) },
+    "No se pudo programar el mantenimiento de voz"
+  )
+);
 
 logger.info({ provider: env.ai.provider, concurrency: env.workerConcurrency }, "Worker iniciado");

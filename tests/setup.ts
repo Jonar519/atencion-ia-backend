@@ -21,6 +21,8 @@ vi.mock("../src/queues/queues", () => ({
   closeQueues: vi.fn().mockResolvedValue(undefined),
   KB_INDEXING_QUEUE: "kb-indexing",
   ESCALATION_NOTIFY_QUEUE: "escalation-notify",
+  VOICE_MAINTENANCE_QUEUE: "voice-maintenance",
+  scheduleVoiceMaintenance: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../src/realtime/staffEvents", () => ({
