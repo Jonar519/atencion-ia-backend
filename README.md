@@ -7,18 +7,18 @@ resolver (fraude, cliente molesto, pide un humano…) la conversación se escala
 
 ## Estado por fase
 
-| Fase | Contenido                                                                                                   | Estado    |
-| ---- | ----------------------------------------------------------------------------------------------------------- | --------- |
-| 2    | Identidad del staff, autorización por rol y por dueño, base de conocimiento, conversaciones, observabilidad | ✅        |
-| 3    | IA: proveedor intercambiable (`AI_PROVIDER=mock` por defecto), RAG, intención/sentimiento, escalamiento     | ✅        |
-| 4    | WebSocket de tiempo real (solo recepción), sesión del widget en cookie httpOnly, frontend                   | ✅        |
-| 5    | Voz: señalización WebRTC, STT/TTS (`VOICE_PROVIDER=mock`)                                                   | pendiente |
+| Fase | Contenido                                                                                                   | Estado |
+| ---- | ----------------------------------------------------------------------------------------------------------- | ------ |
+| 2    | Identidad del staff, autorización por rol y por dueño, base de conocimiento, conversaciones, observabilidad | ✅     |
+| 3    | IA: proveedor intercambiable (`AI_PROVIDER=mock` por defecto), RAG, intención/sentimiento, escalamiento     | ✅     |
+| 4    | WebSocket de tiempo real (solo recepción), sesión del widget en cookie httpOnly, frontend                   | ✅     |
+| 5    | Voz: señalización WebRTC, STT/TTS (`VOICE_PROVIDER=mock`), mismo motor, retención                           | ✅     |
 
 ## Stack
 
 Node.js 20+ · TypeScript · Express 4 · Prisma 6 (solo como cliente) · PostgreSQL 16 +
 pgvector · Redis 7 (rate limiting, colas BullMQ y pub/sub de tiempo real) · zod ·
-pino · prom-client · ws · Vitest + supertest.
+pino · prom-client · ws · Vitest + supertest. Voz: Deepgram (STT/TTS) detrás de una interfaz, `mock` por defecto.
 
 ## Relación con los otros repositorios
 
@@ -61,46 +61,54 @@ Producción local (compilado): `npm run build` y luego `npm start`.
 
 ## Scripts
 
-| Comando                       | Qué hace                                                             |
-| ----------------------------- | -------------------------------------------------------------------- |
-| `npm run dev`                 | Servidor con recarga automática (tsx)                                |
-| `npm run build` / `npm start` | Compila a `dist/` / ejecuta lo compilado                             |
-| `npm test`                    | Tests unitarios y de integración (recrea la base `atencion_ia_test`) |
-| `npm run lint`                | ESLint + Prettier (verificación, no modifica)                        |
-| `npm run format`              | Aplica Prettier                                                      |
-| `npm run typecheck`           | `tsc` del código y de los tests                                      |
-| `npm run prisma:pull`         | Re-introspecciona el esquema tras una migración nueva                |
-| `scripts\verify.bat`          | lint → typecheck → tests → build (lo mismo que la CI)                |
-| `npm run worker`              | Worker de colas: indexación del RAG y avisos de escalamiento (tsx)   |
-| `npm run worker:start`        | Worker compilado (tras `npm run build`)                              |
-| `npm run kb:reindex`          | Re-indexa TODA la KB para el RAG, sin necesitar el worker            |
-| `npm run rag:calibrate`       | Mide la calidad del RAG y ayuda a elegir `RAG_MIN_SCORE`             |
-| `npm run test:shuffle`        | Tests en orden aleatorio (detecta dependencias entre tests)          |
-| `npm run test:mutations`      | Rompe a propósito cada regla crítica y exige que los tests fallen    |
+| Comando                       | Qué hace                                                                      |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| `npm run dev`                 | Servidor con recarga automática (tsx)                                         |
+| `npm run build` / `npm start` | Compila a `dist/` / ejecuta lo compilado                                      |
+| `npm test`                    | Tests unitarios y de integración (recrea la base `atencion_ia_test`)          |
+| `npm run lint`                | ESLint + Prettier (verificación, no modifica)                                 |
+| `npm run format`              | Aplica Prettier                                                               |
+| `npm run typecheck`           | `tsc` del código y de los tests                                               |
+| `npm run prisma:pull`         | Re-introspecciona el esquema tras una migración nueva                         |
+| `scripts\verify.bat`          | lint → typecheck → tests → build (lo mismo que la CI)                         |
+| `npm run worker`              | Worker de colas: indexación del RAG y avisos de escalamiento (tsx)            |
+| `npm run worker:start`        | Worker compilado (tras `npm run build`)                                       |
+| `npm run kb:reindex`          | Re-indexa TODA la KB para el RAG, sin necesitar el worker                     |
+| `npm run rag:calibrate`       | Mide la calidad del RAG y ayuda a elegir `RAG_MIN_SCORE`                      |
+| `npm run test:shuffle`        | Tests en orden aleatorio (detecta dependencias entre tests)                   |
+| `npm run test:mutations`      | Rompe a propósito cada regla crítica y exige que los tests fallen             |
+| `npm run voice:demo`          | Llamada de voz de demo por consola contra la API ([guía](docs/demo-fase5.md)) |
+| `npm run voice:purge`         | Purga las transcripciones vencidas (lo mismo que el worker cada hora)         |
 
 ## Configuración (`.env`)
 
 Se valida con zod al arrancar: si algo falta o es inseguro, **el servidor no arranca** y
 dice qué corregir. Ver `.env.example` (comentado).
 
-| Variable                                          | Por defecto                       | Nota                                                                                     |
-| ------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                    | — (obligatoria)                   | `postgresql://postgres:postgres@localhost:5434/atencion_ia`                              |
-| `REDIS_URL`                                       | `redis://localhost:6380`          |                                                                                          |
-| `PORT`                                            | `4100`                            | 4000 lo usa el Proyecto 1                                                                |
-| `JWT_SECRET`, `IP_HASH_SECRET`                    | — (obligatorias)                  | ≥ 32 caracteres, distintas entre sí                                                      |
-| `JWT_EXPIRES_IN` / `REFRESH_TOKEN_TTL_DAYS`       | `15m` / `7`                       |                                                                                          |
-| `CORS_ORIGIN`                                     | `http://localhost:5174`           | Obligatoria en producción                                                                |
-| `TRUST_PROXY`                                     | `0`                               | `1` detrás de un balanceador                                                             |
-| `METRICS_TOKEN`                                   | vacío (= `/metrics` responde 404) | ≥ 16 caracteres                                                                          |
-| `SHUTDOWN_TIMEOUT_MS` / `SHUTDOWN_DRAIN_DELAY_MS` | `10000` / `0`                     |                                                                                          |
-| `RATE_LIMIT_SCALE`                                | `1`                               | Solo pruebas de carga; prohibido en producción                                           |
-| `AI_PROVIDER`                                     | `mock`                            | `anthropic` exige `ANTHROPIC_API_KEY` y `VOYAGE_API_KEY`; `mock` prohibido en producción |
-| `ANTHROPIC_MODEL` / `ANTHROPIC_CLASSIFIER_MODEL`  | `claude-opus-5-5`                 | Ver [ADR 0005](docs/adr/0005-proveedor-de-ia-intercambiable.md)                          |
-| `VOYAGE_MODEL`                                    | `voyage-3.5`                      | Embeddings de 1024 dimensiones                                                           |
-| `RAG_TOP_K` / `RAG_MIN_SCORE`                     | `4` / 0.2 (mock), 0.45 (Voyage)   | El de Voyage está **sin calibrar** ([docs/rag.md](docs/rag.md))                          |
-| `AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER`              | `60000`                           | Tope diario de tokens por cliente                                                        |
-| `WORKER_CONCURRENCY` / `WORKER_METRICS_PORT`      | `2` / `9465`                      |                                                                                          |
+| Variable                                                          | Por defecto                           | Nota                                                                                                                |
+| ----------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                                    | — (obligatoria)                       | `postgresql://postgres:postgres@localhost:5434/atencion_ia`                                                         |
+| `REDIS_URL`                                                       | `redis://localhost:6380`              |                                                                                                                     |
+| `PORT`                                                            | `4100`                                | 4000 lo usa el Proyecto 1                                                                                           |
+| `JWT_SECRET`, `IP_HASH_SECRET`                                    | — (obligatorias)                      | ≥ 32 caracteres, distintas entre sí                                                                                 |
+| `JWT_EXPIRES_IN` / `REFRESH_TOKEN_TTL_DAYS`                       | `15m` / `7`                           |                                                                                                                     |
+| `CORS_ORIGIN`                                                     | `http://localhost:5174`               | Obligatoria en producción                                                                                           |
+| `TRUST_PROXY`                                                     | `0`                                   | `1` detrás de un balanceador                                                                                        |
+| `METRICS_TOKEN`                                                   | vacío (= `/metrics` responde 404)     | ≥ 16 caracteres                                                                                                     |
+| `SHUTDOWN_TIMEOUT_MS` / `SHUTDOWN_DRAIN_DELAY_MS`                 | `10000` / `0`                         |                                                                                                                     |
+| `RATE_LIMIT_SCALE`                                                | `1`                                   | Solo pruebas de carga; prohibido en producción                                                                      |
+| `AI_PROVIDER`                                                     | `mock`                                | `anthropic` exige `ANTHROPIC_API_KEY` y `VOYAGE_API_KEY`; `mock` prohibido en producción                            |
+| `ANTHROPIC_MODEL` / `ANTHROPIC_CLASSIFIER_MODEL`                  | `claude-opus-5-5`                     | Ver [ADR 0005](docs/adr/0005-proveedor-de-ia-intercambiable.md)                                                     |
+| `VOYAGE_MODEL`                                                    | `voyage-3.5`                          | Embeddings de 1024 dimensiones                                                                                      |
+| `RAG_TOP_K` / `RAG_MIN_SCORE`                                     | `4` / 0.2 (mock), 0.45 (Voyage)       | El de Voyage está **sin calibrar** ([docs/rag.md](docs/rag.md))                                                     |
+| `AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER`                              | `60000`                               | Tope diario de tokens por cliente                                                                                   |
+| `WORKER_CONCURRENCY` / `WORKER_METRICS_PORT`                      | `2` / `9465`                          |                                                                                                                     |
+| `VOICE_PROVIDER`                                                  | `mock`                                | `deepgram` exige `DEEPGRAM_API_KEY`; `mock` prohibido en producción ([ADR 0011](docs/adr/0011-proveedor-de-voz.md)) |
+| `DEEPGRAM_STT_MODEL` / `DEEPGRAM_LANGUAGE` / `DEEPGRAM_TTS_MODEL` | `nova-3` / `es` / `aura-2-celeste-es` |                                                                                                                     |
+| `VOICE_TRANSCRIPT_RETENTION_DAYS`                                 | `90`                                  | 1–180 ([docs/privacy-voice.md](docs/privacy-voice.md))                                                              |
+| `VOICE_MAX_CALL_SECONDS` / `VOICE_DAILY_SECONDS_PER_CUSTOMER`     | `900` / `1800`                        | Topes por llamada y por cliente en 24 h                                                                             |
+| `VOICE_RECONNECT_GRACE_MS` / `VOICE_CONNECT_TIMEOUT_MS`           | `15000` / `30000`                     |                                                                                                                     |
+| `ICE_SERVERS`                                                     | `[]`                                  | STUN/TURN (JSON) para WebRTC entre cliente y agente                                                                 |
 
 ## API
 
@@ -108,30 +116,38 @@ Todas las rutas bajo `/api` exigen `Authorization: Bearer <accessToken>`, salvo
 `/api/auth/login`, `/refresh` y `/logout`. Errores: `{ error, details? }`; los de
 validación traen `details: [{ field, message }]` en español.
 
-| Método y ruta                                                 | Quién                                    | Qué hace                                                                                                                                         |
-| ------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /api/auth/login`                                        | público                                  | `{ email, password }` → `{ accessToken, staff }` + cookie de refresh                                                                             |
-| `POST /api/auth/refresh`                                      | cookie + `X-Requested-With: atencion-ia` | Rota el refresh y entrega un access token nuevo                                                                                                  |
-| `POST /api/auth/logout`                                       | cookie + `X-Requested-With: atencion-ia` | Revoca la sesión                                                                                                                                 |
-| `GET /api/auth/me`                                            | staff                                    | Datos propios                                                                                                                                    |
-| `PATCH /api/staff/me/availability`                            | staff                                    | `{ availability: offline\|available\|busy\|away }`                                                                                               |
-| `GET /api/staff` · `POST /api/staff` · `PATCH /api/staff/:id` | **admin**                                | Gestión de cuentas (política de contraseñas; desactivar cierra sesiones)                                                                         |
-| `GET /api/kb/articles` · `GET /api/kb/articles/:id`           | staff                                    | Base de conocimiento (filtros `status`, `category`, `q`; cursor)                                                                                 |
-| `POST` · `PATCH` · `DELETE /api/kb/articles/:id`              | **admin**                                | Crear/editar/borrar artículos (la versión sube si cambia título o cuerpo)                                                                        |
-| `GET /api/conversations?scope=mine\|queue\|all`               | staff (`all` solo admin)                 | Listado (cola: por prioridad; resto: por último mensaje, con cursor)                                                                             |
-| `GET /api/conversations/:id`                                  | dueño o cola                             | Detalle: cliente, escalamientos, llamadas                                                                                                        |
-| `GET /api/conversations/:id/messages`                         | dueño o cola                             | Historial, del más reciente hacia atrás, con cursor                                                                                              |
-| `POST /api/conversations/:id/take`                            | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                                                                                             |
-| `POST /api/conversations/:id/close`                           | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                                                                                                   |
-| `POST /api/conversations/:id/messages`                        | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                                                                                       |
-| `POST /api/widget/sessions`                                   | público (cliente)                        | Sesión anónima `{ displayName? }`. Con `X-Requested-With`: cookie httpOnly y **sin** token en el cuerpo; sin él (API/curl): `{ token: "wgt_…" }` |
-| `GET /api/widget/session` · `POST /api/widget/session/end`    | cliente                                  | Datos de la sesión actual · cerrarla (revoca el token y borra la cookie)                                                                         |
-| `GET` · `POST /api/widget/conversations`                      | cliente (cookie o `Bearer wgt_…`)        | Sus conversaciones (máx. 3 abiertas)                                                                                                             |
-| `GET /api/widget/conversations/:id/messages`                  | el cliente dueño                         | Historial (sin el análisis de IA ni datos internos)                                                                                              |
-| `POST /api/widget/conversations/:id/messages`                 | el cliente dueño                         | `{ content, clientMsgId? }` → motor conversacional: respuesta o traspaso                                                                         |
-| `GET /ws` (upgrade)                                           | staff o cliente                          | Tiempo real, solo recepción (ver abajo)                                                                                                          |
-| `GET /health` · `GET /ready`                                  | sondas                                   | Liveness / readiness (Postgres + Redis)                                                                                                          |
-| `GET /metrics`                                                | `Bearer METRICS_TOKEN`                   | Prometheus                                                                                                                                       |
+| Método y ruta                                                  | Quién                                    | Qué hace                                                                                                                                         |
+| -------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /api/auth/login`                                         | público                                  | `{ email, password }` → `{ accessToken, staff }` + cookie de refresh                                                                             |
+| `POST /api/auth/refresh`                                       | cookie + `X-Requested-With: atencion-ia` | Rota el refresh y entrega un access token nuevo                                                                                                  |
+| `POST /api/auth/logout`                                        | cookie + `X-Requested-With: atencion-ia` | Revoca la sesión                                                                                                                                 |
+| `GET /api/auth/me`                                             | staff                                    | Datos propios                                                                                                                                    |
+| `PATCH /api/staff/me/availability`                             | staff                                    | `{ availability: offline\|available\|busy\|away }`                                                                                               |
+| `GET /api/staff` · `POST /api/staff` · `PATCH /api/staff/:id`  | **admin**                                | Gestión de cuentas (política de contraseñas; desactivar cierra sesiones)                                                                         |
+| `GET /api/kb/articles` · `GET /api/kb/articles/:id`            | staff                                    | Base de conocimiento (filtros `status`, `category`, `q`; cursor)                                                                                 |
+| `POST` · `PATCH` · `DELETE /api/kb/articles/:id`               | **admin**                                | Crear/editar/borrar artículos (la versión sube si cambia título o cuerpo)                                                                        |
+| `GET /api/conversations?scope=mine\|queue\|all`                | staff (`all` solo admin)                 | Listado (cola: por prioridad; resto: por último mensaje, con cursor)                                                                             |
+| `GET /api/conversations/:id`                                   | dueño o cola                             | Detalle: cliente, escalamientos, llamadas                                                                                                        |
+| `GET /api/conversations/:id/messages`                          | dueño o cola                             | Historial, del más reciente hacia atrás, con cursor                                                                                              |
+| `POST /api/conversations/:id/take`                             | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                                                                                             |
+| `POST /api/conversations/:id/close`                            | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                                                                                                   |
+| `POST /api/conversations/:id/messages`                         | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                                                                                       |
+| `POST /api/widget/sessions`                                    | público (cliente)                        | Sesión anónima `{ displayName? }`. Con `X-Requested-With`: cookie httpOnly y **sin** token en el cuerpo; sin él (API/curl): `{ token: "wgt_…" }` |
+| `GET /api/widget/session` · `POST /api/widget/session/end`     | cliente                                  | Datos de la sesión actual · cerrarla (revoca el token y borra la cookie)                                                                         |
+| `GET` · `POST /api/widget/conversations`                       | cliente (cookie o `Bearer wgt_…`)        | Sus conversaciones (máx. 3 abiertas)                                                                                                             |
+| `GET /api/widget/conversations/:id/messages`                   | el cliente dueño                         | Historial (sin el análisis de IA ni datos internos)                                                                                              |
+| `POST /api/widget/conversations/:id/messages`                  | el cliente dueño                         | `{ content, clientMsgId? }` → motor conversacional: respuesta o traspaso                                                                         |
+| `GET /api/widget/voice/consent`                                | cliente                                  | Aviso de consentimiento vigente (versión y texto)                                                                                                |
+| `POST /api/widget/conversations/:id/calls`                     | cliente dueño                            | `{ consentVersion, accepted: true }` → llamada + formato de audio + ICE                                                                          |
+| `GET /api/widget/calls/:id` · `POST /api/widget/calls/:id/end` | cliente dueño                            | Estado de la llamada · colgar                                                                                                                    |
+| `GET /api/calls/active`                                        | staff                                    | Llamadas activas que puede ver                                                                                                                   |
+| `POST /api/calls/:id/join`                                     | agente (toma el caso si está en cola)    | Se une: devuelve la transcripción acumulada                                                                                                      |
+| `POST /api/calls/:id/leave` · `POST /api/calls/:id/end`        | el agente asignado (colgar: o admin)     | Salir de la llamada · colgarla                                                                                                                   |
+| `GET /api/calls/:id/transcript`                                | quien ve el caso                         | Transcripción (vacía si se purgó)                                                                                                                |
+| `GET /ws/voice` (upgrade)                                      | cliente o agente unido                   | Audio + señalización WebRTC (ver abajo)                                                                                                          |
+| `GET /ws` (upgrade)                                            | staff o cliente                          | Tiempo real, solo recepción (ver abajo)                                                                                                          |
+| `GET /health` · `GET /ready`                                   | sondas                                   | Liveness / readiness (Postgres + Redis)                                                                                                          |
+| `GET /metrics`                                                 | `Bearer METRICS_TOKEN`                   | Prometheus                                                                                                                                       |
 
 ### Quién ve qué (autorización por dueño)
 
@@ -171,20 +187,43 @@ idempotencia, rate limit y tope de IA en un solo lugar). Ver
 - Lo publicado mientras un cliente estaba desconectado **no** se reenvía: al reconectar, el
   frontend vuelve a pedir el historial por REST.
 
+## Voz (`/ws/voice`, Fase 5)
+
+Detalle en [ADR 0010](docs/adr/0010-arquitectura-de-voz.md), la política de datos en
+[docs/privacy-voice.md](docs/privacy-voice.md) y la demo paso a paso en [docs/demo-fase5.md](docs/demo-fase5.md).
+
+- **Consentimiento primero:** sin aceptar el aviso vigente no hay llamada (la base exige `consent_given_at`).
+- **Audio del cliente → STT → el MISMO motor de la Fase 3** (`handleCustomerTurn` con `channel: "voice"`):
+  cada frase final es un turno, con RAG, intención y reglas de escalamiento idénticas al texto. La
+  respuesta vuelve como audio (TTS). Si el motor escala, la llamada pasa a `waiting_agent`.
+- **Agente:** `POST /api/calls/:id/join` toma el caso (misma toma atómica del panel) y devuelve la
+  transcripción acumulada. Luego abre `/ws/voice`: la señalización WebRTC se relea **solo** al otro
+  participante de esa llamada, por Redis pub/sub (`atencion-ia:voice`), así funciona con varias instancias.
+  El audio entre personas va de navegador a navegador.
+- **Transcripción en vivo:** los parciales llegan al panel (`call.transcript.partial`) solo para el staff que ve el caso.
+- **Límites:** audio ≤ 1,25× tiempo real (4429), tope diario de segundos por cliente, duración
+  máxima, una conexión por rol ("la más nueva gana"), gracia de reconexión.
+- **Mantenimiento (worker):** barrido de llamadas abandonadas cada minuto y purga por retención cada hora.
+- Cierres: `4400` mensaje o audio inválido · `4401` credencial inválida · `4403` no puede estar en esa
+  llamada · `4408` sin autenticarse · `4409` venció la sesión · `4410` reemplazada · `4429` abuso.
+
 ### Rate limiting (Redis)
 
-| Límite              | Clave                       | Cupo                                               |
-| ------------------- | --------------------------- | -------------------------------------------------- |
-| Global `/api`       | IP                          | 600 / 15 min                                       |
-| Login               | IP (solo fallos)            | 10 / 15 min                                        |
-| Bloqueo progresivo  | cuenta (SHA-256 del correo) | libre hasta 5 fallos; luego 1, 2, 4… min (máx. 60) |
-| Refresh / logout    | IP                          | 60 / 15 min                                        |
-| Mensajes de agente  | usuario                     | 60 / min                                           |
-| Escrituras de admin | usuario                     | 120 / 15 min                                       |
-
-| Sesiones del widget | IP | 20 / hora |
-| Mensajes a la IA | sesión del widget | 12 / min |
-| Tokens de IA | cliente | `AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER` en 24 h |
+| Límite                       | Clave                       | Cupo                                               |
+| ---------------------------- | --------------------------- | -------------------------------------------------- |
+| Global `/api`                | IP                          | 600 / 15 min                                       |
+| Login                        | IP (solo fallos)            | 10 / 15 min                                        |
+| Bloqueo progresivo           | cuenta (SHA-256 del correo) | libre hasta 5 fallos; luego 1, 2, 4… min (máx. 60) |
+| Refresh / logout             | IP                          | 60 / 15 min                                        |
+| Mensajes de agente           | usuario                     | 60 / min                                           |
+| Escrituras de admin          | usuario                     | 120 / 15 min                                       |
+| Sesiones del widget          | IP                          | 20 / hora                                          |
+| Mensajes a la IA             | sesión del widget           | 12 / min                                           |
+| Tokens de IA                 | cliente                     | `AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER` en 24 h       |
+| Llamadas nuevas              | sesión del widget           | 6 / hora                                           |
+| Unirse/salir/colgar llamadas | usuario                     | 30 / min                                           |
+| Audio de voz                 | conexión                    | 1,25× tiempo real (ráfagas de 2 s)                 |
+| Segundos de STT              | cliente                     | `VOICE_DAILY_SECONDS_PER_CUSTOMER` en 24 h         |
 
 ## IA: RAG, intención y escalamiento
 
@@ -226,16 +265,18 @@ npm test
 ```
 
 Recrean una base `atencion_ia_test` aplicando las migraciones **reales** del repo hermano
-(con sus CHECKs e índices parciales). Redis y las colas se simulan. 224 tests en 25 archivos: unitarios (política de
+(con sus CHECKs e índices parciales). Redis y las colas se simulan. 277 tests en 27 archivos: unitarios (política de
 contraseñas, bloqueo, tokens, acceso, versionado de la KB, paginación, redacción de logs,
 apagado, reglas de escalamiento, proveedor mock, adaptadores de Claude y Voyage con clientes
 simulados, prompt injection, fragmentación) y de integración (sesión completa, CSRF, rate limit,
 aislamiento entre agentes y entre clientes, carreras, idempotencia, KB, staff, motor
 conversacional, aislamiento del RAG, indexación, avisos, sondas, métricas, sesión del widget
-por cookie con CSRF y WebSocket real: Origin, autenticación, qué recibe cada destinatario y cierre al vencer).
+por cookie con CSRF y WebSocket real: Origin, autenticación, qué recibe cada destinatario y cierre al vencer)
+y de voz (proveedores mock y Deepgram con dobles, llamada completa con el motor real, aislamiento de la
+señalización entre llamadas e instancias, permisos, topes, gracia, barrido y purga).
 
 Además: `npm run test:shuffle` (orden aleatorio: sin dependencias ocultas entre tests) y
-`npm run test:mutations` (22/22 reglas críticas rotas a propósito son detectadas).
+`npm run test:mutations` (38/38 reglas críticas rotas a propósito son detectadas).
 
 ## Probarlo a mano (cmd.exe, con el seed cargado)
 

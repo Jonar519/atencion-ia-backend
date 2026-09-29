@@ -15,5 +15,7 @@ en este proyecto; las nuevas se justifican completas.
 | [0007](0007-motor-conversacional-independiente-del-canal.md) | Un solo motor conversacional para texto y voz                                     | Aceptada |
 | [0008](0008-tiempo-real-solo-recepcion.md)                   | WebSocket solo de recepción; destinatarios decididos por una función pura         | Aceptada |
 | [0009](0009-sesion-del-widget-en-cookie.md)                  | La sesión del cliente del widget vive en una cookie httpOnly                      | Aceptada |
+| [0010](0010-arquitectura-de-voz.md)                          | Voz: audio al STT por WebSocket propio, WebRTC solo entre personas, un solo motor | Aceptada |
+| [0011](0011-proveedor-de-voz.md)                             | Proveedor de voz: Deepgram (Nova-3 + Aura-2), mock por defecto                    | Aceptada |
 
 Formato: Contexto · Decisión · Alternativas consideradas · Consecuencias · Evidencia.
