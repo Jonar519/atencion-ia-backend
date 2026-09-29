@@ -9,6 +9,7 @@ import { assertWithinBudget, usageRows, type UsageRecord } from "./budget.servic
 import { decideEscalation, handoffMessage, type EscalationDecision } from "./escalationRules";
 import { escalate } from "./escalation.service";
 import { loadHistory } from "./history";
+import { publishConversationUpdated, publishMessagesCreated } from "../../realtime/publish";
 
 /**
  * MOTOR CONVERSACIONAL: procesa UN turno del cliente, venga de donde venga.
@@ -217,6 +218,14 @@ export async function handleCustomerTurn(input: CustomerTurnInput): Promise<Turn
     where: { id: conversation.id },
     select: { status: true },
   });
+
+  // Tiempo real (después de confirmar todo): el mensaje del cliente, la respuesta
+  // o el traspaso, y el cambio de estado si escaló. Llega al cliente (sus otras
+  // pestañas) y a los agentes que pueden ver la conversación (realtime/audience.ts).
+  await publishMessagesCreated(conversation.id, [customerMessage.id, ...(reply ? [reply.id] : [])]);
+  if (after.status !== conversation.status) {
+    await publishConversationUpdated(conversation.id, { status: conversation.status, assignedAgentId: null });
+  }
   engineTurns.inc({
     channel: input.channel,
     outcome: decision.escalate ? "escalated" : withAi ? "ai_reply" : "to_agent",

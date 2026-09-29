@@ -1,15 +1,12 @@
-import { redisConnection } from "../config/redis";
+import { publishRealtime } from "./bus";
 
 /**
- * Eventos para el panel de agentes, publicados en Redis pub/sub. Así cruzan
- * procesos (el worker publica, la API los recibe) y, más adelante, varias
- * instancias de la API. En la Fase 4 el servidor WebSocket se suscribe a este
- * canal y los reenvía a los agentes conectados.
+ * Evento de escalamiento para el panel de agentes (lo publica el worker,
+ * notifyEscalation.ts). Viaja por el mismo bus que los demás eventos de
+ * tiempo real y el servidor WebSocket lo entrega a todo el staff conectado.
  *
- * Nunca llevan contenido de mensajes ni datos personales: solo ids y metadatos.
+ * Nunca lleva contenido de mensajes ni datos personales: solo ids y metadatos.
  */
-export const STAFF_EVENTS_CHANNEL = "atencion-ia:staff-events";
-
 export type StaffEvent = {
   type: "escalation.created";
   escalationId: string;
@@ -24,5 +21,5 @@ export type StaffEvent = {
 };
 
 export async function publishStaffEvent(event: StaffEvent): Promise<void> {
-  await redisConnection.publish(STAFF_EVENTS_CHANNEL, JSON.stringify(event));
+  await publishRealtime(event);
 }

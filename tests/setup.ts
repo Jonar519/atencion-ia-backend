@@ -27,3 +27,6 @@ vi.mock("../src/realtime/staffEvents", () => ({
   STAFF_EVENTS_CHANNEL: "atencion-ia:staff-events",
   publishStaffEvent: vi.fn().mockResolvedValue(undefined),
 }));
+
+// Bus de tiempo real: en memoria (tests/support/memoryBus.ts) en vez de Redis pub/sub.
+vi.mock("../src/realtime/bus", () => import("./support/memoryBus"));

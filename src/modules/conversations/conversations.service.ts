@@ -3,6 +3,7 @@ import { prisma } from "../../config/prisma";
 import { ApiError } from "../../utils/apiError";
 import { afterCursor, toPage } from "../../utils/pagination";
 import { dbNow } from "../../utils/dbTime";
+import { publishConversationUpdated, publishMessagesCreated } from "../../realtime/publish";
 import type { AuthUser } from "../../middlewares/auth.middleware";
 import { canClose, canReply, conversationScope } from "./conversations.access";
 import type {
@@ -207,7 +208,7 @@ export const conversationsService = {
    *     sistema para el cliente, todo en la misma transacción.
    */
   async take(user: AuthUser, id: string) {
-    return prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const [agent] = await tx.$queryRaw<{ name: string; is_active: boolean; max_concurrent: number }[]>`
         SELECT name, is_active, max_concurrent FROM staff_users WHERE id = ${user.staffId}::uuid FOR UPDATE`;
       if (!agent?.is_active) throw new ApiError(403, "Tu cuenta está desactivada");
@@ -242,15 +243,21 @@ export const conversationsService = {
         where: { conversationId: id, status: "open" },
         data: { status: "assigned", assignedAgentId: user.staffId, assignedAt: now },
       });
-      await tx.message.create({
+      const joined = await tx.message.create({
         data: {
           conversationId: id,
           senderType: "system",
           content: `${firstName(agent.name)} se unió a la conversación.`,
         },
+        select: { id: true },
       });
-      return tx.conversation.findUniqueOrThrow({ where: { id }, select: LIST_FIELDS }).then(toListItem);
+      const item = await tx.conversation.findUniqueOrThrow({ where: { id }, select: LIST_FIELDS }).then(toListItem);
+      return { item, joinedMessageId: joined.id };
     });
+    // Tras confirmar: la cola de los demás agentes se actualiza y el cliente ve que lo atienden.
+    await publishConversationUpdated(id, { status: "waiting_agent", assignedAgentId: null });
+    await publishMessagesCreated(id, [result.joinedMessageId]);
+    return result.item;
   },
 
   async close(user: AuthUser, id: string, input: CloseConversationInput) {
@@ -264,7 +271,7 @@ export const conversationsService = {
       );
     }
 
-    return prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const now = await dbNow(tx);
       // Condicionado al estado leído: si cambió entre la lectura y la escritura, 409.
       const { count } = await tx.conversation.updateMany({
@@ -276,11 +283,19 @@ export const conversationsService = {
         where: { conversationId: id, ...OPEN_ESCALATION },
         data: { status: "resolved", resolvedAt: now, resolutionNote: input.note ?? null },
       });
-      await tx.message.create({
+      const closedMessage = await tx.message.create({
         data: { conversationId: id, senderType: "system", content: "La conversación fue cerrada." },
+        select: { id: true },
       });
-      return tx.conversation.findUniqueOrThrow({ where: { id }, select: LIST_FIELDS }).then(toListItem);
+      const item = await tx.conversation.findUniqueOrThrow({ where: { id }, select: LIST_FIELDS }).then(toListItem);
+      return { item, closedMessageId: closedMessage.id };
     });
+    await publishMessagesCreated(id, [result.closedMessageId]);
+    await publishConversationUpdated(id, {
+      status: conversation.status,
+      assignedAgentId: conversation.assignedAgentId,
+    });
+    return result.item;
   },
 
   /**
@@ -319,6 +334,7 @@ export const conversationsService = {
         await tx.conversation.update({ where: { id }, data: { lastMessageAt: created.createdAt } });
         return created;
       });
+      await publishMessagesCreated(id, [message.id]);
       return { message, created: true };
     } catch (err) {
       // Carrera entre dos reenvíos simultáneos del mismo clientMsgId: gana uno.
