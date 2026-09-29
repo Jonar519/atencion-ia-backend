@@ -124,29 +124,31 @@ model Conversation {
 }
 
 model Message {
-  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  conversationId       String                 @map("conversation_id") @db.Uuid
-  senderType           SenderType             @map("sender_type")
-  senderAgentId        String?                @map("sender_agent_id") @db.Uuid
-  channel              ChannelType            @default(text)
-  callId               String?                @map("call_id") @db.Uuid
+  id                   String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId       String                  @map("conversation_id") @db.Uuid
+  senderType           SenderType              @map("sender_type")
+  senderAgentId        String?                 @map("sender_agent_id") @db.Uuid
+  channel              ChannelType             @default(text)
+  callId               String?                 @map("call_id") @db.Uuid
   content              String
   intent               MessageIntent?
   sentiment            MessageSentiment?
-  analysisConfidence   Float?                 @map("analysis_confidence") @db.Real
-  clientMsgId          String?                @map("client_msg_id") @db.Uuid
-  aiModel              String?                @map("ai_model") @db.VarChar(80)
-  aiLatencyMs          Int?                   @map("ai_latency_ms")
-  createdAt            DateTime               @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(6)
-  transcriptSegment    CallTranscriptSegment?
+  analysisConfidence   Float?                  @map("analysis_confidence") @db.Real
+  clientMsgId          String?                 @map("client_msg_id") @db.Uuid
+  aiModel              String?                 @map("ai_model") @db.VarChar(80)
+  aiLatencyMs          Int?                    @map("ai_latency_ms")
+  createdAt            DateTime                @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(6)
+  /// En la base message_id es UNIQUE (un turno = un segmento); Prisma lo modela como lista por la FK compuesta (014).
+  transcriptSegments   CallTranscriptSegment[]
   triggeredEscalations Escalation[]
   citations            MessageCitation[]
-  call                 Call?                  @relation(fields: [callId, conversationId], references: [id, conversationId], onDelete: NoAction, onUpdate: NoAction, map: "fk_messages_call")
-  conversation         Conversation           @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  senderAgent          StaffUser?             @relation(fields: [senderAgentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  call                 Call?                   @relation(fields: [callId, conversationId], references: [id, conversationId], onDelete: NoAction, onUpdate: NoAction, map: "fk_messages_call")
+  conversation         Conversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  senderAgent          StaffUser?              @relation(fields: [senderAgentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([conversationId, clientMsgId], map: "uq_messages_client_msg")
   @@unique([id, conversationId], map: "uq_messages_id_conversation")
+  @@unique([id, callId], map: "uq_messages_id_call")
   @@index([conversationId, createdAt, id], map: "idx_messages_conversation")
   @@map("messages")
 }
@@ -210,6 +212,7 @@ model Call {
   retainUntil        DateTime                @map("retain_until") @db.Timestamptz(6)
   createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime                @default(now()) @map("updated_at") @db.Timestamptz(6)
+  transcriptPurgedAt DateTime?               @map("transcript_purged_at") @db.Timestamptz(6)
   aiUsage            AiUsage[]
   participants       CallParticipant[]
   transcriptSegments CallTranscriptSegment[]
@@ -250,7 +253,7 @@ model CallTranscriptSegment {
   messageId  String?         @unique(map: "uq_call_transcript_segments_message") @map("message_id") @db.Uuid
   createdAt  DateTime        @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(6)
   call       Call            @relation(fields: [callId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  message    Message?        @relation(fields: [messageId], references: [id], onUpdate: NoAction)
+  message    Message?        @relation(fields: [messageId, callId], references: [id, callId], onDelete: SetNull, onUpdate: NoAction, map: "fk_call_transcript_segments_message_same_call")
 
   @@unique([callId, seq], map: "uq_call_transcript_segments_seq")
   @@map("call_transcript_segments")
