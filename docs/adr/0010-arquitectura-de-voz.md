@@ -84,5 +84,7 @@ transcripción alimente la misma función conversacional de la Fase 3.
 - Mutaciones 23–38 de `npm run test:mutations`.
 - Prueba en vivo en `docs/demo-fase5.md`.
 
-**No verificado todavía:** una conexión WebRTC real con audio entre dos navegadores. Llega con la
-UI de voz de la Fase 6.
+**Verificado en la Fase 6 (UI de voz):** con WebRTC real entre dos pestañas del navegador, la conexión
+quedó `connected` y el audio fluye en ambos sentidos (nivel medido del otro lado). Micrófono
+sintético, no humano: ver `atencion-ia-frontend/docs/prueba-voz.md`. **No verificado:** entre dos
+equipos distintos (requiere HTTPS y TURN).

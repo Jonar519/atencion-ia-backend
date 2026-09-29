@@ -5,8 +5,8 @@ no hacen falta credenciales. Un script hace de cliente (y, si se pide, de agente
 velocidad real por el WebSocket de voz. En el navegador, el panel de agente muestra la conversación
 y la **transcripción en vivo**.
 
-La UI de voz (botón de llamar en el widget, micrófono real y botón "unirse" en el panel) llega en
-la Fase 6.
+Para probar con tu micrófono en el navegador (botón de llamar, unirse, WebRTC real) usa la guía
+`atencion-ia-frontend/docs/prueba-voz.md`.
 
 ## Antes de empezar
 
@@ -108,7 +108,8 @@ Resultados:
 
 ## No verificado
 
-- Audio real de micrófono y WebRTC real entre dos navegadores (Fase 6).
+- Audio real de micrófono y WebRTC real: ya hay UI de voz; la guía para probarlo con tu micrófono
+  está en `atencion-ia-frontend/docs/prueba-voz.md`.
 - El proveedor real (Deepgram): solo se probó el protocolo con dobles
   ([ADR 0011](adr/0011-proveedor-de-voz.md)).
 - La latencia con un proveedor real: **no medida**. Con el mock, un turno tarda milisegundos.
