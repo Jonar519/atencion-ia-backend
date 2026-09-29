@@ -3,7 +3,8 @@ import { prisma } from "../../config/prisma";
 import { ApiError } from "../../utils/apiError";
 import { afterCursor, toPage } from "../../utils/pagination";
 import { dbNow } from "../../utils/dbTime";
-import { publishConversationUpdated, publishMessagesCreated } from "../../realtime/publish";
+import { publishCallUpdated, publishConversationUpdated, publishMessagesCreated } from "../../realtime/publish";
+import { publishVoice } from "../../realtime/bus";
 import type { AuthUser } from "../../middlewares/auth.middleware";
 import { canClose, canReply, conversationScope } from "./conversations.access";
 import type {
@@ -283,13 +284,30 @@ export const conversationsService = {
         where: { conversationId: id, ...OPEN_ESCALATION },
         data: { status: "resolved", resolvedAt: now, resolutionNote: input.note ?? null },
       });
+      // Cerrar el caso cuelga su llamada activa: no queda audio transcribiéndose
+      // en una conversación cerrada.
+      const activeCall = await tx.call.findFirst({
+        where: { conversationId: id, status: { in: ["connecting", "in_progress", "waiting_agent"] } },
+        select: { id: true },
+      });
+      if (activeCall) {
+        await tx.call.update({
+          where: { id: activeCall.id },
+          data: { status: "ended", endedAt: now, endReason: "agent_hangup" },
+        });
+        await tx.callParticipant.updateMany({ where: { callId: activeCall.id, leftAt: null }, data: { leftAt: now } });
+      }
       const closedMessage = await tx.message.create({
         data: { conversationId: id, senderType: "system", content: "La conversación fue cerrada." },
         select: { id: true },
       });
       const item = await tx.conversation.findUniqueOrThrow({ where: { id }, select: LIST_FIELDS }).then(toListItem);
-      return { item, closedMessageId: closedMessage.id };
+      return { item, closedMessageId: closedMessage.id, endedCallId: activeCall?.id ?? null };
     });
+    if (result.endedCallId) {
+      await publishVoice({ kind: "ended", callId: result.endedCallId, reason: "agent_hangup" });
+      await publishCallUpdated(result.endedCallId);
+    }
     await publishMessagesCreated(id, [result.closedMessageId]);
     await publishConversationUpdated(id, {
       status: conversation.status,

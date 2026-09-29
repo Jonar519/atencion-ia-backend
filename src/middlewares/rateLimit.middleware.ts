@@ -92,3 +92,22 @@ export const customerAiLimiter = limiter(
     keyGenerator: (req: Request) => req.widget?.sessionId ?? ipKeyGenerator(req.ip ?? ""),
   }
 );
+
+/**
+ * Llamadas de voz nuevas: cada una abre STT/TTS (cuesta dinero). Por sesión
+ * del widget; los topes diarios de voz y de IA por cliente son la segunda barrera.
+ */
+export const callStartLimiter = limiter(
+  "call-start",
+  60 * MINUTE,
+  6,
+  "Demasiadas llamadas seguidas. Espera un momento.",
+  {
+    keyGenerator: (req: Request) => req.widget?.sessionId ?? ipKeyGenerator(req.ip ?? ""),
+  }
+);
+
+/** Unirse/salir/colgar llamadas desde el panel. */
+export const callStaffLimiter = limiter("call-staff", MINUTE, 30, "Demasiadas acciones sobre llamadas seguidas.", {
+  keyGenerator: byUser,
+});

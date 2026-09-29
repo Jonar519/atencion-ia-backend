@@ -11,6 +11,7 @@ import { validate } from "../../middlewares/validate.middleware";
 import { customerAiLimiter, widgetSessionLimiter } from "../../middlewares/rateLimit.middleware";
 import { uuidParams } from "../../utils/schemas";
 import { asyncHandler } from "../../utils/asyncHandler";
+import { widgetVoiceRouter } from "../voice/voice.routes";
 
 // API pública del widget de cliente. Autenticación: token opaco de sesión
 // (widgetAuth); autorización por dueño: cada consulta filtra por el cliente
@@ -49,3 +50,6 @@ widgetRouter.post(
   validate({ params: idParams, body: customerMessageSchema }),
   asyncHandler(widgetController.sendMessage)
 );
+
+// Voz (Fase 5): consentimiento, iniciar, consultar y colgar llamadas.
+widgetRouter.use(widgetVoiceRouter);

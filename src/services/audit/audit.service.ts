@@ -30,9 +30,14 @@ export type AuditAction =
   | "conversation.view"
   | "conversation.take"
   | "conversation.close"
-  | "conversation.message";
+  | "conversation.message"
+  | "call.start"
+  | "call.join"
+  | "call.leave"
+  | "call.end"
+  | "call.purge";
 
-export type AuditEntity = "staff_user" | "session" | "kb_article" | "conversation";
+export type AuditEntity = "staff_user" | "session" | "kb_article" | "conversation" | "call";
 
 export interface AuditEntry {
   action: AuditAction;
