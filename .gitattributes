@@ -1,0 +1,6 @@
+# Finales de línea LF en el repo; los .bat de Windows con CRLF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.ico binary
+*.wav binary
