@@ -8,10 +8,11 @@ import { flushAudit } from "./services/audit/audit.service";
 import { closeHttpServer, createGracefulShutdown } from "./lifecycle/shutdown";
 import { closeQueues } from "./queues/queues";
 import { attachRealtime } from "./realtime/wsServer";
+import { attachVoice } from "./realtime/voiceServer";
 
 async function main() {
   await prisma.$connect();
-  logger.info({ aiProvider: env.ai.provider }, "Conectado a la base de datos.");
+  logger.info({ aiProvider: env.ai.provider, voiceProvider: env.voice.provider }, "Conectado a la base de datos.");
 
   const app = createApp();
   const server = app.listen(env.port, () => {
@@ -19,6 +20,8 @@ async function main() {
   });
   // WebSocket de tiempo real en el mismo puerto (ruta /ws).
   const realtime = await attachRealtime(server);
+  // WebSocket de voz (audio + señalización WebRTC) en /ws/voice.
+  const voice = await attachVoice(server);
 
   /**
    * Apagado ordenado (SIGTERM del orquestador, o Ctrl+C = SIGINT en la consola):
@@ -39,6 +42,7 @@ async function main() {
       },
       // Primero los WebSocket: el navegador se reconecta a otra instancia.
       { name: "WebSocket", run: () => realtime.close() },
+      { name: "WebSocket de voz", run: () => voice.close() },
       { name: "servidor HTTP", run: () => closeHttpServer(server) },
       { name: "auditoría pendiente", run: () => flushAudit() },
       { name: "colas", run: () => closeQueues() },
