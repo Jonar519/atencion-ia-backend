@@ -16,6 +16,26 @@ const secret = (name: string) =>
 
 const positiveInt = (fallback: number) => z.coerce.number().int().min(1).default(fallback);
 
+const iceServersSchema = z
+  .array(
+    z
+      .object({
+        urls: z.union([z.string().regex(/^(stun|turns?):/), z.array(z.string().regex(/^(stun|turns?):/)).min(1)]),
+        username: z.string().optional(),
+        credential: z.string().optional(),
+      })
+      .strict()
+  )
+  .max(5);
+
+function safeJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 const schema = z
   .object({
     PORT: positiveInt(4100),
@@ -69,6 +89,29 @@ const schema = z
     // Worker (BullMQ): concurrencia y puerto de sus métricas/sondas.
     WORKER_CONCURRENCY: positiveInt(2),
     WORKER_METRICS_PORT: positiveInt(9465),
+
+    // --- Voz (Fase 5) ---
+    // "mock" (por defecto): transcripción y síntesis simuladas, sin costo ni credenciales.
+    // "deepgram": STT en streaming (Nova-3) y TTS (Aura-2) de Deepgram, con una sola API key.
+    VOICE_PROVIDER: z.enum(["mock", "deepgram"]).default("mock"),
+    DEEPGRAM_API_KEY: z.string().optional(),
+    DEEPGRAM_STT_MODEL: z.string().min(1).default("nova-3"),
+    DEEPGRAM_LANGUAGE: z.string().min(2).default("es"),
+    // Voz de Aura-2 en español (celeste: acento colombiano). Ver docs/adr/0011.
+    DEEPGRAM_TTS_MODEL: z.string().min(1).default("aura-2-celeste-es"),
+    VOICE_TIMEOUT_MS: positiveInt(15_000),
+    // Retención de la transcripción (docs/privacy-voice.md). La base impone un máximo de 180.
+    VOICE_TRANSCRIPT_RETENTION_DAYS: z.coerce.number().int().min(1).max(180).default(90),
+    VOICE_MAX_CALL_SECONDS: positiveInt(900),
+    // Tope diario de audio transcrito por cliente (defensa contra agotar créditos por voz).
+    VOICE_DAILY_SECONDS_PER_CUSTOMER: positiveInt(1_800),
+    // Si el cliente se desconecta, cuánto se espera a que vuelva antes de cortar.
+    VOICE_RECONNECT_GRACE_MS: positiveInt(15_000),
+    // Una llamada creada a la que el cliente nunca conecta el audio se da por fallida.
+    VOICE_CONNECT_TIMEOUT_MS: positiveInt(30_000),
+    // Servidores STUN/TURN para WebRTC, como JSON (RTCIceServer[]). Vacío = sin ICE externo
+    // (funciona en la misma máquina o red local; en redes reales hace falta un TURN).
+    ICE_SERVERS: z.string().default("[]"),
   })
   .superRefine((value, ctx) => {
     if (value.JWT_SECRET === value.IP_HASH_SECRET) {
@@ -93,6 +136,24 @@ const schema = z
         code: "custom",
         path: ["AI_PROVIDER"],
         message: "mock responde con plantillas: no puede usarse con NODE_ENV=production",
+      });
+    }
+    if (value.VOICE_PROVIDER === "deepgram" && !value.DEEPGRAM_API_KEY) {
+      ctx.addIssue({ code: "custom", path: ["DEEPGRAM_API_KEY"], message: "Obligatoria con VOICE_PROVIDER=deepgram" });
+    }
+    if (isProduction && value.VOICE_PROVIDER === "mock") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["VOICE_PROVIDER"],
+        message: "mock simula la voz: no puede usarse con NODE_ENV=production",
+      });
+    }
+    const ice = iceServersSchema.safeParse(safeJson(value.ICE_SERVERS));
+    if (!ice.success) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["ICE_SERVERS"],
+        message: 'Debe ser un JSON como [{"urls":"stun:stun.example.org:3478"}]',
       });
     }
     if (value.METRICS_TOKEN && value.METRICS_TOKEN.length < 16) {
@@ -152,4 +213,19 @@ export const env = {
   widgetSessionTtlHours: e.WIDGET_SESSION_TTL_HOURS,
   workerConcurrency: e.WORKER_CONCURRENCY,
   workerMetricsPort: e.WORKER_METRICS_PORT,
+
+  voice: {
+    provider: e.VOICE_PROVIDER,
+    deepgramApiKey: e.DEEPGRAM_API_KEY,
+    sttModel: e.VOICE_PROVIDER === "mock" ? "mock-stt-v1" : e.DEEPGRAM_STT_MODEL,
+    ttsModel: e.VOICE_PROVIDER === "mock" ? "mock-tts-v1" : e.DEEPGRAM_TTS_MODEL,
+    language: e.DEEPGRAM_LANGUAGE,
+    timeoutMs: e.VOICE_TIMEOUT_MS,
+    retentionDays: e.VOICE_TRANSCRIPT_RETENTION_DAYS,
+    maxCallSeconds: e.VOICE_MAX_CALL_SECONDS,
+    dailySecondsPerCustomer: e.VOICE_DAILY_SECONDS_PER_CUSTOMER,
+    reconnectGraceMs: e.VOICE_RECONNECT_GRACE_MS,
+    connectTimeoutMs: e.VOICE_CONNECT_TIMEOUT_MS,
+    iceServers: iceServersSchema.parse(JSON.parse(e.ICE_SERVERS)),
+  },
 };

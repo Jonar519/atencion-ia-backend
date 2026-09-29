@@ -81,6 +81,50 @@ export const websocketConnections = new Gauge({
   registers: [registry],
 });
 
+// --- Voz (Fase 5) ---
+export const voiceCallEvents = new Counter({
+  name: "atencion_ia_voice_call_events_total",
+  help: "Ciclo de vida de las llamadas: iniciadas, contestadas, en espera de agente, agente unido, terminadas (con motivo)",
+  labelNames: ["event", "reason"] as const,
+  registers: [registry],
+});
+
+export const voiceSockets = new Gauge({
+  name: "atencion_ia_voice_sockets",
+  help: "WebSockets de voz autenticados en esta instancia, por rol (customer o agent)",
+  labelNames: ["role"] as const,
+  registers: [registry],
+});
+
+export const voiceProviderDuration = new Histogram({
+  name: "atencion_ia_voice_provider_duration_seconds",
+  help: "Latencia del proveedor de voz (síntesis TTS)",
+  labelNames: ["provider", "operation", "outcome"] as const,
+  buckets: SECONDS_SLOW,
+  registers: [registry],
+});
+
+export const voiceAudioSeconds = new Counter({
+  name: "atencion_ia_voice_audio_seconds_total",
+  help: "Segundos de audio enviados al STT, por proveedor y rol del hablante",
+  labelNames: ["provider", "role"] as const,
+  registers: [registry],
+});
+
+export const voiceTtsCharacters = new Counter({
+  name: "atencion_ia_voice_tts_characters_total",
+  help: "Caracteres sintetizados por el TTS",
+  labelNames: ["provider"] as const,
+  registers: [registry],
+});
+
+export const voiceTurnLatency = new Histogram({
+  name: "atencion_ia_voice_turn_latency_seconds",
+  help: "Desde que el STT cierra la frase del cliente hasta que empieza a enviarse el audio de la respuesta",
+  buckets: SECONDS_SLOW,
+  registers: [registry],
+});
+
 export const queueJobs = new Gauge({
   name: "atencion_ia_queue_jobs",
   help: "Trabajos por cola y estado (se lee de Redis en cada scrape)",
