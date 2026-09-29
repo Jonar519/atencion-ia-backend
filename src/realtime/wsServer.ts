@@ -10,6 +10,7 @@ import { websocketConnections } from "../observability/metrics";
 import { audienceFor, type SocketIdentity } from "./audience";
 import { subscribeRealtime } from "./bus";
 import type { RealtimeEvent } from "./events";
+import { WEBSOCKET_PATHS, WS_PATH } from "./paths";
 
 /**
  * WebSocket de tiempo real (ruta /ws, mismo puerto que la API). SOLO RECIBE:
@@ -34,7 +35,7 @@ import type { RealtimeEvent } from "./events";
  *    cliente renueva y se reconecta.
  */
 
-export const WS_PATH = "/ws";
+export { WS_PATH };
 export const WS_CLOSE = {
   unauthorized: 4401,
   authTimeout: 4408,
@@ -73,7 +74,8 @@ export async function attachRealtime(
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const { pathname } = new URL(req.url ?? "/", "http://localhost");
     if (pathname !== WS_PATH) {
-      socket.destroy();
+      // Otras rutas conocidas (/ws/voice) las atiende su propio servidor; lo desconocido se corta.
+      if (!WEBSOCKET_PATHS.includes(pathname)) socket.destroy();
       return;
     }
     const origin = req.headers.origin;

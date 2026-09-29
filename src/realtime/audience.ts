@@ -16,6 +16,9 @@ import type { RealtimeEvent } from "./events";
  *    recibe UNA vez el aviso de cambio de estado, sin contenido, para que su
  *    cola se actualice; los mensajes siguientes ya no le llegan.
  *  - Avisos de escalamiento: a todo el staff (la cola general es visible para todos).
+ *  - Llamadas: el cliente solo ve el ESTADO de sus llamadas (sin quién la atiende
+ *    por id); la transcripción parcial en vivo es SOLO para el staff que puede ver
+ *    el caso (el cliente recibe la suya por el WebSocket de voz).
  */
 
 export type SocketIdentity = { kind: "staff"; user: AuthUser } | { kind: "customer"; customerId: string };
@@ -39,6 +42,13 @@ function forCustomer(event: RealtimeEvent, customerId: string): Record<string, u
     case "conversation.updated":
       if (event.conversation.customerId !== customerId) return null;
       return { type: event.type, conversation: { id: event.conversation.id, status: event.conversation.status } };
+    case "call.updated":
+      if (event.conversation.customerId !== customerId) return null;
+      return {
+        type: event.type,
+        conversation: { id: event.conversation.id, status: event.conversation.status },
+        call: { id: event.call.id, status: event.call.status, endReason: event.call.endReason },
+      };
     default:
       // Escalamientos y demás eventos internos: nunca al cliente.
       return null;
@@ -55,6 +65,9 @@ function forStaff(event: RealtimeEvent, user: AuthUser): Record<string, unknown>
       if (!visibleNow && !visibleBefore) return null;
       return { type: event.type, conversation: event.conversation, visible: visibleNow };
     }
+    case "call.updated":
+    case "call.transcript.partial":
+      return canViewConversation(user, event.conversation) ? { ...event } : null;
     case "escalation.created":
       return user.role === "admin" || user.role === "agent" ? { ...event } : null;
     default:

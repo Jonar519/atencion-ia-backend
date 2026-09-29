@@ -69,3 +69,41 @@ export async function publishConversationUpdated(
     logger.warn({ err: err instanceof Error ? err.message : String(err) }, "No se pudo publicar el cambio de estado");
   }
 }
+
+export async function publishCallUpdated(callId: string): Promise<void> {
+  try {
+    const call = await prisma.call.findUnique({
+      where: { id: callId },
+      select: { id: true, status: true, endReason: true, handledByAgentId: true, conversationId: true },
+    });
+    if (!call) return;
+    const conversation = await conversationRef(call.conversationId);
+    if (!conversation) return;
+    const { conversationId: _conversationId, ...ref } = call;
+    await publishRealtime({ type: "call.updated", conversation, call: ref });
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "No se pudo publicar el estado de la llamada"
+    );
+  }
+}
+
+/** Transcripción parcial en vivo (no se guarda). Lee el estado ACTUAL del caso: decide quién la ve. */
+export async function publishTranscriptPartial(
+  conversationId: string,
+  callId: string,
+  speaker: "customer" | "agent",
+  text: string
+): Promise<void> {
+  try {
+    const conversation = await conversationRef(conversationId);
+    if (!conversation) return;
+    await publishRealtime({ type: "call.transcript.partial", conversation, callId, speaker, text });
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "No se pudo publicar la transcripción parcial"
+    );
+  }
+}

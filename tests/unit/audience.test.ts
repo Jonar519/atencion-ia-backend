@@ -140,3 +140,51 @@ describe("reparto de eventos por WebSocket: staff", () => {
     expect(audienceFor(created(conv({ status: "waiting_agent", assignedAgentId: null })), intruso)).toBeNull();
   });
 });
+
+describe("reparto de eventos de LLAMADAS", () => {
+  const callUpdated = (c: ConversationRef): RealtimeEvent => ({
+    type: "call.updated",
+    conversation: c,
+    call: {
+      id: "d0000000-0000-4000-8000-0000000000aa",
+      status: "in_progress",
+      endReason: null,
+      handledByAgentId: LAURA,
+    },
+  });
+  const partial = (c: ConversationRef): RealtimeEvent => ({
+    type: "call.transcript.partial",
+    conversation: c,
+    callId: "d0000000-0000-4000-8000-0000000000aa",
+    speaker: "customer",
+    text: "mi clave es",
+  });
+
+  it("el cliente ve el ESTADO de su llamada (sin ids del staff) y nunca el de otro cliente", () => {
+    const payload = audienceFor(callUpdated(conv()), clienteA) as { call: Record<string, unknown> };
+    expect(payload.call).toEqual({
+      id: "d0000000-0000-4000-8000-0000000000aa",
+      status: "in_progress",
+      endReason: null,
+    });
+    expect(audienceFor(callUpdated(conv()), clienteB)).toBeNull();
+  });
+
+  it("la transcripción parcial NUNCA va a clientes (ni al dueño: la recibe por su socket de voz)", () => {
+    expect(audienceFor(partial(conv()), clienteA)).toBeNull();
+    expect(audienceFor(partial(conv()), clienteB)).toBeNull();
+  });
+
+  it("el staff ve llamadas y parciales solo de casos que puede ver", () => {
+    expect(audienceFor(partial(conv()), laura)).not.toBeNull();
+    expect(audienceFor(partial(conv()), diego)).toBeNull();
+    expect(audienceFor(partial(conv()), admin)).not.toBeNull();
+    expect(audienceFor(callUpdated(conv()), diego)).toBeNull();
+    // En cola: todos los agentes la ven (pueden unirse).
+    const queued = conv({ status: "waiting_agent", assignedAgentId: null });
+    expect(audienceFor(callUpdated(queued), diego)).not.toBeNull();
+    // Con la IA (sin escalar): ningún agente.
+    const withAi = conv({ status: "ai_active", assignedAgentId: null });
+    expect(audienceFor(partial(withAi), laura)).toBeNull();
+  });
+});

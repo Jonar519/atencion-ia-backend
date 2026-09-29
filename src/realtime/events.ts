@@ -1,4 +1,12 @@
-import type { ChannelType, ConversationStatus, MessageIntent, MessageSentiment, SenderType } from "@prisma/client";
+import type {
+  CallEndReason,
+  CallStatus,
+  ChannelType,
+  ConversationStatus,
+  MessageIntent,
+  MessageSentiment,
+  SenderType,
+} from "@prisma/client";
 import type { StaffEvent } from "./staffEvents";
 
 /**
@@ -33,6 +41,13 @@ export interface RealtimeMessage {
   sentiment: MessageSentiment | null;
 }
 
+export interface CallRef {
+  id: string;
+  status: CallStatus;
+  endReason: CallEndReason | null;
+  handledByAgentId: string | null;
+}
+
 export type RealtimeEvent =
   | { type: "message.created"; conversation: ConversationRef; message: RealtimeMessage }
   | {
@@ -40,5 +55,19 @@ export type RealtimeEvent =
       conversation: ConversationRef;
       /** Estado anterior: quien la veía antes (p. ej. en la cola) debe enterarse de que ya no está. */
       previous: Pick<ConversationRef, "status" | "assignedAgentId"> | null;
+    }
+  /** Cambio de estado de una llamada (conectando, en curso, en espera de agente, terminada). */
+  | { type: "call.updated"; conversation: ConversationRef; call: CallRef }
+  /**
+   * Transcripción PARCIAL en vivo (lo que el STT va entendiendo antes de cerrar
+   * la frase). No se guarda: solo viaja al panel. Los segmentos finales llegan
+   * como message.created (son turnos de la conversación).
+   */
+  | {
+      type: "call.transcript.partial";
+      conversation: ConversationRef;
+      callId: string;
+      speaker: "customer" | "agent";
+      text: string;
     }
   | StaffEvent;
