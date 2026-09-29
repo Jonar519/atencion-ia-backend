@@ -23,7 +23,9 @@
     "kb:reindex": "tsx src/scripts/reindexKb.ts",
     "rag:calibrate": "tsx src/scripts/calibrateRag.ts",
     "test:shuffle": "vitest run --sequence.shuffle",
-    "test:mutations": "node scripts/mutation-check.mjs"
+    "test:mutations": "node scripts/mutation-check.mjs",
+    "voice:purge": "tsx src/scripts/purgeVoice.ts",
+    "voice:demo": "tsx src/scripts/voiceDemo.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
