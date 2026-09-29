@@ -17,11 +17,19 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "lint": "eslint . && prettier --check .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "worker": "tsx watch src/workers/worker.ts",
+    "worker:start": "node dist/workers/worker.js",
+    "kb:reindex": "tsx src/scripts/reindexKb.ts",
+    "rag:calibrate": "tsx src/scripts/calibrateRag.ts",
+    "test:shuffle": "vitest run --sequence.shuffle",
+    "test:mutations": "node scripts/mutation-check.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.129.0",
     "@prisma/client": "^6.19.3",
     "bcrypt": "^6.0.0",
+    "bullmq": "^5.81.5",
     "compression": "^1.8.2",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
