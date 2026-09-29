@@ -74,6 +74,13 @@ export const ragTopScore = new Histogram({
   registers: [registry],
 });
 
+export const websocketConnections = new Gauge({
+  name: "atencion_ia_websocket_connections",
+  help: "WebSockets autenticados conectados a esta instancia, por tipo (staff o cliente)",
+  labelNames: ["kind"] as const,
+  registers: [registry],
+});
+
 export const queueJobs = new Gauge({
   name: "atencion_ia_queue_jobs",
   help: "Trabajos por cola y estado (se lee de Redis en cada scrape)",

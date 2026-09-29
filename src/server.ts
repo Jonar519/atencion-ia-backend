@@ -7,6 +7,7 @@ import { markShuttingDown } from "./observability/health";
 import { flushAudit } from "./services/audit/audit.service";
 import { closeHttpServer, createGracefulShutdown } from "./lifecycle/shutdown";
 import { closeQueues } from "./queues/queues";
+import { attachRealtime } from "./realtime/wsServer";
 
 async function main() {
   await prisma.$connect();
@@ -16,6 +17,8 @@ async function main() {
   const server = app.listen(env.port, () => {
     logger.info(`API escuchando en http://localhost:${env.port}`);
   });
+  // WebSocket de tiempo real en el mismo puerto (ruta /ws).
+  const realtime = await attachRealtime(server);
 
   /**
    * Apagado ordenado (SIGTERM del orquestador, o Ctrl+C = SIGINT en la consola):
@@ -34,6 +37,8 @@ async function main() {
         name: "drenaje del balanceador",
         run: () => new Promise((resolve) => setTimeout(resolve, env.shutdownDrainDelayMs)),
       },
+      // Primero los WebSocket: el navegador se reconecta a otra instancia.
+      { name: "WebSocket", run: () => realtime.close() },
       { name: "servidor HTTP", run: () => closeHttpServer(server) },
       { name: "auditoría pendiente", run: () => flushAudit() },
       { name: "colas", run: () => closeQueues() },
