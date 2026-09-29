@@ -6,10 +6,11 @@ import { redisConnection } from "./config/redis";
 import { markShuttingDown } from "./observability/health";
 import { flushAudit } from "./services/audit/audit.service";
 import { closeHttpServer, createGracefulShutdown } from "./lifecycle/shutdown";
+import { closeQueues } from "./queues/queues";
 
 async function main() {
   await prisma.$connect();
-  logger.info("Conectado a la base de datos.");
+  logger.info({ aiProvider: env.ai.provider }, "Conectado a la base de datos.");
 
   const app = createApp();
   const server = app.listen(env.port, () => {
@@ -35,6 +36,7 @@ async function main() {
       },
       { name: "servidor HTTP", run: () => closeHttpServer(server) },
       { name: "auditoría pendiente", run: () => flushAudit() },
+      { name: "colas", run: () => closeQueues() },
       { name: "Redis", run: () => redisConnection.quit() },
       { name: "PostgreSQL", run: () => prisma.$disconnect() },
     ],

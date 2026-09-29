@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { kbService } from "./kb.service";
 import { audit } from "../../services/audit/audit.service";
+import { enqueueArticleIndexing } from "../../queues/queues";
 import { currentUser, routeParam } from "../../utils/params";
 import type { ListArticlesQuery } from "./kb.schema";
 
@@ -21,6 +22,8 @@ export const kbController = {
       entityId: article.id,
       metadata: { status: article.status },
     });
+    // Indexa para el RAG en segundo plano (el worker descarta los que no están publicados).
+    await enqueueArticleIndexing(article.id, article.version, article.status);
     res.status(201).json(article);
   },
 
@@ -33,6 +36,7 @@ export const kbController = {
       entityId: id,
       metadata: { fields: Object.keys(req.body), version: article.version, contentChanged },
     });
+    await enqueueArticleIndexing(article.id, article.version, article.status);
     res.json(article);
   },
 
