@@ -5,26 +5,193 @@ API REST, WebSocket (mensajería en tiempo real y señalización WebRTC) y worke
 una IA con RAG sobre la base de conocimiento de la empresa responde, y cuando no puede
 resolver (fraude, cliente molesto, pide un humano…) la conversación se escala a un agente.
 
+## Estado por fase
+
+| Fase | Contenido                                                                                                   | Estado    |
+| ---- | ----------------------------------------------------------------------------------------------------------- | --------- |
+| 2    | Identidad del staff, autorización por rol y por dueño, base de conocimiento, conversaciones, observabilidad | ✅        |
+| 3    | IA: proveedor intercambiable (`AI_PROVIDER=mock` por defecto), RAG, intención/sentimiento, escalamiento     | pendiente |
+| 4    | WebSocket de mensajes en tiempo real (el frontend)                                                          | pendiente |
+| 5    | Voz: señalización WebRTC, STT/TTS (`VOICE_PROVIDER=mock`)                                                   | pendiente |
+
 ## Stack
 
-Node.js + TypeScript + Express · Prisma (solo como cliente) · PostgreSQL + pgvector ·
-BullMQ + Redis (colas, rate limiting, pub/sub de señalización) · zod · pino ·
-prom-client · Vitest.
-
-Proveedores intercambiables por variable de entorno, con modo `mock` por defecto (sin
-costo ni credenciales, usado en desarrollo y CI):
-- `AI_PROVIDER`: chat, clasificación de intención y embeddings.
-- `VOICE_PROVIDER`: transcripción (STT) y síntesis (TTS).
+Node.js 20+ · TypeScript · Express 4 · Prisma 6 (solo como cliente) · PostgreSQL 16 +
+pgvector · Redis 7 (rate limiting; colas BullMQ y pub/sub desde la Fase 3/5) · zod ·
+pino · prom-client · Vitest + supertest.
 
 ## Relación con los otros repositorios
 
-| Repositorio | Relación |
-|---|---|
-| `atencion-ia-database` | Dueño del esquema. Este repo lo **introspecciona** (`npx prisma db pull`); nunca crea ni altera tablas. Los tests de integración aplican sus migraciones desde `../atencion-ia-database/migrations`. |
-| `atencion-ia-frontend` | Cliente de esta API (widget de cliente y panel de agente). Sesión de staff: access token corto en memoria + refresh token rotativo en cookie httpOnly. |
+| Repositorio            | Relación                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `atencion-ia-database` | Dueño del esquema **y** del `docker-compose.yml` con Postgres (5434) y Redis (6380). Este repo lo **introspecciona** (`npx prisma db pull`); nunca crea ni altera tablas. Los tests aplican sus migraciones desde `../atencion-ia-database/migrations`, así que **las tres carpetas deben ser hermanas**. |
+| `atencion-ia-frontend` | Cliente de esta API (Fase 4).                                                                                                                                                                                                                                                                             |
 
-## Estado
+## Primera vez (Windows, cmd.exe)
 
-**Fase 0**: repositorio inicializado. El código llega en la Fase 2 (identidad,
-autorización, observabilidad), la Fase 3 (IA) y la Fase 5 (voz), con las instrucciones
-de arranque en cmd.exe en este README.
+```bat
+:: 1. Base de datos y Redis (en el repo hermano)
+cd ..\atencion-ia-database
+docker compose up -d
+scripts\migrate.bat
+scripts\seed.bat
+cd ..\atencion-ia-backend
+
+:: 2. Dependencias y cliente de Prisma
+npm install
+npx prisma generate
+
+:: 3. Configuración: copia y pon secretos propios
+copy .env.example .env
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+::    (pega un valor en JWT_SECRET y OTRO distinto en IP_HASH_SECRET, dentro de .env)
+
+:: 4. Arrancar en desarrollo (recarga al guardar)
+npm run dev
+```
+
+La API queda en `http://localhost:4100`. Para detenerla: **Ctrl+C** (hace el apagado
+ordenado; cmd.exe envía SIGINT, que sigue el mismo camino que el SIGTERM de producción).
+
+Producción local (compilado): `npm run build` y luego `npm start`.
+
+## Scripts
+
+| Comando                       | Qué hace                                                             |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `npm run dev`                 | Servidor con recarga automática (tsx)                                |
+| `npm run build` / `npm start` | Compila a `dist/` / ejecuta lo compilado                             |
+| `npm test`                    | Tests unitarios y de integración (recrea la base `atencion_ia_test`) |
+| `npm run lint`                | ESLint + Prettier (verificación, no modifica)                        |
+| `npm run format`              | Aplica Prettier                                                      |
+| `npm run typecheck`           | `tsc` del código y de los tests                                      |
+| `npm run prisma:pull`         | Re-introspecciona el esquema tras una migración nueva                |
+| `scripts\verify.bat`          | lint → typecheck → tests → build (lo mismo que la CI)                |
+
+## Configuración (`.env`)
+
+Se valida con zod al arrancar: si algo falta o es inseguro, **el servidor no arranca** y
+dice qué corregir. Ver `.env.example` (comentado).
+
+| Variable                                          | Por defecto                       | Nota                                                        |
+| ------------------------------------------------- | --------------------------------- | ----------------------------------------------------------- |
+| `DATABASE_URL`                                    | — (obligatoria)                   | `postgresql://postgres:postgres@localhost:5434/atencion_ia` |
+| `REDIS_URL`                                       | `redis://localhost:6380`          |                                                             |
+| `PORT`                                            | `4100`                            | 4000 lo usa el Proyecto 1                                   |
+| `JWT_SECRET`, `IP_HASH_SECRET`                    | — (obligatorias)                  | ≥ 32 caracteres, distintas entre sí                         |
+| `JWT_EXPIRES_IN` / `REFRESH_TOKEN_TTL_DAYS`       | `15m` / `7`                       |                                                             |
+| `CORS_ORIGIN`                                     | `http://localhost:5174`           | Obligatoria en producción                                   |
+| `TRUST_PROXY`                                     | `0`                               | `1` detrás de un balanceador                                |
+| `METRICS_TOKEN`                                   | vacío (= `/metrics` responde 404) | ≥ 16 caracteres                                             |
+| `SHUTDOWN_TIMEOUT_MS` / `SHUTDOWN_DRAIN_DELAY_MS` | `10000` / `0`                     |                                                             |
+| `RATE_LIMIT_SCALE`                                | `1`                               | Solo pruebas de carga; prohibido en producción              |
+
+## API (Fase 2)
+
+Todas las rutas bajo `/api` exigen `Authorization: Bearer <accessToken>`, salvo
+`/api/auth/login`, `/refresh` y `/logout`. Errores: `{ error, details? }`; los de
+validación traen `details: [{ field, message }]` en español.
+
+| Método y ruta                                                 | Quién                                    | Qué hace                                                                  |
+| ------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
+| `POST /api/auth/login`                                        | público                                  | `{ email, password }` → `{ accessToken, staff }` + cookie de refresh      |
+| `POST /api/auth/refresh`                                      | cookie + `X-Requested-With: atencion-ia` | Rota el refresh y entrega un access token nuevo                           |
+| `POST /api/auth/logout`                                       | cookie + `X-Requested-With: atencion-ia` | Revoca la sesión                                                          |
+| `GET /api/auth/me`                                            | staff                                    | Datos propios                                                             |
+| `PATCH /api/staff/me/availability`                            | staff                                    | `{ availability: offline\|available\|busy\|away }`                        |
+| `GET /api/staff` · `POST /api/staff` · `PATCH /api/staff/:id` | **admin**                                | Gestión de cuentas (política de contraseñas; desactivar cierra sesiones)  |
+| `GET /api/kb/articles` · `GET /api/kb/articles/:id`           | staff                                    | Base de conocimiento (filtros `status`, `category`, `q`; cursor)          |
+| `POST` · `PATCH` · `DELETE /api/kb/articles/:id`              | **admin**                                | Crear/editar/borrar artículos (la versión sube si cambia título o cuerpo) |
+| `GET /api/conversations?scope=mine\|queue\|all`               | staff (`all` solo admin)                 | Listado (cola: por prioridad; resto: por último mensaje, con cursor)      |
+| `GET /api/conversations/:id`                                  | dueño o cola                             | Detalle: cliente, escalamientos, llamadas                                 |
+| `GET /api/conversations/:id/messages`                         | dueño o cola                             | Historial, del más reciente hacia atrás, con cursor                       |
+| `POST /api/conversations/:id/take`                            | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                      |
+| `POST /api/conversations/:id/close`                           | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                            |
+| `POST /api/conversations/:id/messages`                        | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                |
+| `GET /health` · `GET /ready`                                  | sondas                                   | Liveness / readiness (Postgres + Redis)                                   |
+| `GET /metrics`                                                | `Bearer METRICS_TOKEN`                   | Prometheus                                                                |
+
+### Quién ve qué (autorización por dueño)
+
+Una sola regla en `src/modules/conversations/conversations.access.ts` (ver
+[ADR 0003](docs/adr/0003-autorizacion-por-alcance.md)):
+
+- **admin**: todas las conversaciones.
+- **agent**: las asignadas a él (en curso o cerradas) y la **cola general** (en espera y
+  sin asignar), para leer el historial antes de tomar el caso. No ve las que atiende la
+  IA sin escalar ni las de otros agentes: esas responden **404**.
+
+### Rate limiting (Redis)
+
+| Límite              | Clave                       | Cupo                                               |
+| ------------------- | --------------------------- | -------------------------------------------------- |
+| Global `/api`       | IP                          | 600 / 15 min                                       |
+| Login               | IP (solo fallos)            | 10 / 15 min                                        |
+| Bloqueo progresivo  | cuenta (SHA-256 del correo) | libre hasta 5 fallos; luego 1, 2, 4… min (máx. 60) |
+| Refresh / logout    | IP                          | 60 / 15 min                                        |
+| Mensajes de agente  | usuario                     | 60 / min                                           |
+| Escrituras de admin | usuario                     | 120 / 15 min                                       |
+
+Los endpoints de IA (Fase 3) tendrán su propio límite por cliente desde el primer commit.
+
+## Observabilidad
+
+- **Logs** estructurados (pino): una línea por petición con `requestId` (también en el
+  header `X-Request-Id`), método, ruta, estado, duración e id del staff. Se redactan
+  credenciales, cookies, secretos y **el contenido de los mensajes**. En desarrollo se
+  ven con colores; en producción, JSON.
+- **Métricas** Prometheus en `/metrics` (con token): duración HTTP por ruta como patrón
+  (nunca ids), eventos de autenticación y de conversaciones, métricas del proceso.
+- **Sondas**: `/health` no consulta dependencias; `/ready` sí, y responde 503 durante el
+  apagado.
+- **Apagado ordenado** (SIGTERM/SIGINT): readiness 503 → drenaje → cierre HTTP esperando
+  lo que está en curso → auditoría pendiente → Redis → Postgres. Tiempo máximo
+  configurable.
+- **Auditoría** (`audit_log`): login (éxito/fallo/bloqueo), reutilización de refresh,
+  cambios de staff y KB, ver/tomar/cerrar/responder conversaciones. Sin correos de
+  logins fallidos ni contenido de mensajes; IP como HMAC.
+
+## Tests
+
+```bat
+npm test
+```
+
+Recrean una base `atencion_ia_test` aplicando las migraciones **reales** del repo hermano
+(con sus CHECKs e índices parciales). Redis se simula. 95 tests: unitarios (política de
+contraseñas, bloqueo, tokens, acceso, versionado de la KB, paginación, redacción de logs,
+apagado) y de integración (sesión completa, bloqueo, CSRF, rate limit, aislamiento entre
+agentes, carreras al tomar, idempotencia, KB, staff, sondas y métricas).
+
+## Probarlo a mano (cmd.exe, con el seed cargado)
+
+```bat
+curl -s -c %TEMP%\laura-cookies.txt -H "Content-Type: application/json" -d "{\"email\":\"laura@cordillera.example\",\"password\":\"Password123!\"}" http://localhost:4100/api/auth/login
+```
+
+Copia el `accessToken` de la respuesta y:
+
+```bat
+set TOKEN=pega_aqui_el_token
+:: Su conversación (200) y la de Diego (404)
+curl -s -H "Authorization: Bearer %TOKEN%" http://localhost:4100/api/conversations/c0000000-0000-4000-8000-000000000003
+curl -s -H "Authorization: Bearer %TOKEN%" http://localhost:4100/api/conversations/c0000000-0000-4000-8000-000000000007
+```
+
+Cuentas del seed: `admin@`, `laura@`, `diego@cordillera.example` (contraseña
+`Password123!`; ver el README de `atencion-ia-database`).
+
+## Prisma: lo que no está en `schema.prisma`
+
+`schema.prisma` se obtiene con `db pull` y los modelos se renombraron a PascalCase con
+`@@map`/`@map`. Un nuevo `db pull` conserva esos renombres y los comentarios `///`, pero
+**borra** los `//` (medido), por eso lo importante está aquí:
+
+- CHECKs, índices únicos **parciales**, FKs compuestas y triggers viven solo en la base.
+- `calls.duration_seconds` es una columna calculada: solo lectura.
+- `kb_chunks.embedding` (`vector(1024)`) se usa con SQL crudo.
+- **Nunca** `prisma migrate` ni `prisma db push` (ver [ADR 0001](docs/adr/0001-prisma-solo-como-cliente.md)).
+
+## Decisiones
+
+Ver [`docs/adr/`](docs/adr/README.md).
