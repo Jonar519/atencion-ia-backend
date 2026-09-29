@@ -116,3 +116,48 @@ export async function createConversation(status: ConversationStatus, assignedAge
   }
   return { conversation, customer, message };
 }
+
+// ---------------------------------------------------------------------------
+// Fase 3: widget del cliente y base de conocimiento indexada
+// ---------------------------------------------------------------------------
+
+export function widgetHeader(token: string) {
+  return { Authorization: `Bearer ${token}` };
+}
+
+/** Sesión anónima del widget (IP propia para no gastar el cupo de otros tests). */
+export async function widgetSession(displayName = "Cliente de prueba") {
+  const res = await request(app).post("/api/widget/sessions").set("X-Forwarded-For", freshIp()).send({ displayName });
+  if (res.status !== 201) throw new Error(`widgetSession falló (${res.status}): ${JSON.stringify(res.body)}`);
+  return { token: res.body.token as string, customerId: res.body.customerId as string };
+}
+
+export async function widgetConversation(token: string) {
+  const res = await request(app).post("/api/widget/conversations").set(widgetHeader(token)).send({});
+  if (res.status !== 201) throw new Error(`widgetConversation falló (${res.status}): ${JSON.stringify(res.body)}`);
+  return res.body.id as string;
+}
+
+export function sendCustomerMessage(token: string, conversationId: string, content: string, clientMsgId?: string) {
+  return request(app)
+    .post(`/api/widget/conversations/${conversationId}/messages`)
+    .set(widgetHeader(token))
+    .send(clientMsgId ? { content, clientMsgId } : { content });
+}
+
+/** Artículo publicado (o en el estado pedido) ya indexado con el proveedor mock. */
+export async function kbArticle(title: string, body: string, status: "published" | "draft" | "archived" = "published") {
+  const { indexArticle } = await import("../src/modules/rag/indexing.service");
+  const article = await prisma.kbArticle.create({
+    data: {
+      slug: `art-${unique().replace(/\D/g, "")}`,
+      title,
+      body,
+      category: "pruebas",
+      status,
+      publishedAt: status === "draft" ? null : new Date(),
+    },
+  });
+  await indexArticle(article.id);
+  return article;
+}
