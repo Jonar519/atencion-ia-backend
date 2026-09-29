@@ -1,0 +1,9 @@
+{
+  // Typecheck de tests y configuración (no se compila a dist/).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src", "tests", "vitest.config.ts"]
+}
