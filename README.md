@@ -10,7 +10,7 @@ resolver (fraude, cliente molesto, pide un humano…) la conversación se escala
 | Fase | Contenido                                                                                                   | Estado    |
 | ---- | ----------------------------------------------------------------------------------------------------------- | --------- |
 | 2    | Identidad del staff, autorización por rol y por dueño, base de conocimiento, conversaciones, observabilidad | ✅        |
-| 3    | IA: proveedor intercambiable (`AI_PROVIDER=mock` por defecto), RAG, intención/sentimiento, escalamiento     | pendiente |
+| 3    | IA: proveedor intercambiable (`AI_PROVIDER=mock` por defecto), RAG, intención/sentimiento, escalamiento     | ✅        |
 | 4    | WebSocket de mensajes en tiempo real (el frontend)                                                          | pendiente |
 | 5    | Voz: señalización WebRTC, STT/TTS (`VOICE_PROVIDER=mock`)                                                   | pendiente |
 
@@ -46,11 +46,15 @@ copy .env.example .env
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ::    (pega un valor en JWT_SECRET y OTRO distinto en IP_HASH_SECRET, dentro de .env)
 
-:: 4. Arrancar en desarrollo (recarga al guardar)
+:: 4. Indexar la base de conocimiento del seed para el RAG (una vez; vienen sin embeddings)
+npm run kb:reindex
+
+:: 5. Arrancar en desarrollo (recarga al guardar), en DOS ventanas de cmd:
 npm run dev
+npm run worker
 ```
 
-La API queda en `http://localhost:4100`. Para detenerla: **Ctrl+C** (hace el apagado
+La API queda en `http://localhost:4100` y el worker expone `/health` en `:9465`. Para detenerla: **Ctrl+C** (hace el apagado
 ordenado; cmd.exe envía SIGINT, que sigue el mismo camino que el SIGTERM de producción).
 
 Producción local (compilado): `npm run build` y luego `npm start`.
@@ -67,26 +71,38 @@ Producción local (compilado): `npm run build` y luego `npm start`.
 | `npm run typecheck`           | `tsc` del código y de los tests                                      |
 | `npm run prisma:pull`         | Re-introspecciona el esquema tras una migración nueva                |
 | `scripts\verify.bat`          | lint → typecheck → tests → build (lo mismo que la CI)                |
+| `npm run worker`              | Worker de colas: indexación del RAG y avisos de escalamiento (tsx)   |
+| `npm run worker:start`        | Worker compilado (tras `npm run build`)                              |
+| `npm run kb:reindex`          | Re-indexa TODA la KB para el RAG, sin necesitar el worker            |
+| `npm run rag:calibrate`       | Mide la calidad del RAG y ayuda a elegir `RAG_MIN_SCORE`             |
+| `npm run test:shuffle`        | Tests en orden aleatorio (detecta dependencias entre tests)          |
+| `npm run test:mutations`      | Rompe a propósito cada regla crítica y exige que los tests fallen    |
 
 ## Configuración (`.env`)
 
 Se valida con zod al arrancar: si algo falta o es inseguro, **el servidor no arranca** y
 dice qué corregir. Ver `.env.example` (comentado).
 
-| Variable                                          | Por defecto                       | Nota                                                        |
-| ------------------------------------------------- | --------------------------------- | ----------------------------------------------------------- |
-| `DATABASE_URL`                                    | — (obligatoria)                   | `postgresql://postgres:postgres@localhost:5434/atencion_ia` |
-| `REDIS_URL`                                       | `redis://localhost:6380`          |                                                             |
-| `PORT`                                            | `4100`                            | 4000 lo usa el Proyecto 1                                   |
-| `JWT_SECRET`, `IP_HASH_SECRET`                    | — (obligatorias)                  | ≥ 32 caracteres, distintas entre sí                         |
-| `JWT_EXPIRES_IN` / `REFRESH_TOKEN_TTL_DAYS`       | `15m` / `7`                       |                                                             |
-| `CORS_ORIGIN`                                     | `http://localhost:5174`           | Obligatoria en producción                                   |
-| `TRUST_PROXY`                                     | `0`                               | `1` detrás de un balanceador                                |
-| `METRICS_TOKEN`                                   | vacío (= `/metrics` responde 404) | ≥ 16 caracteres                                             |
-| `SHUTDOWN_TIMEOUT_MS` / `SHUTDOWN_DRAIN_DELAY_MS` | `10000` / `0`                     |                                                             |
-| `RATE_LIMIT_SCALE`                                | `1`                               | Solo pruebas de carga; prohibido en producción              |
+| Variable                                          | Por defecto                       | Nota                                                                                     |
+| ------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                    | — (obligatoria)                   | `postgresql://postgres:postgres@localhost:5434/atencion_ia`                              |
+| `REDIS_URL`                                       | `redis://localhost:6380`          |                                                                                          |
+| `PORT`                                            | `4100`                            | 4000 lo usa el Proyecto 1                                                                |
+| `JWT_SECRET`, `IP_HASH_SECRET`                    | — (obligatorias)                  | ≥ 32 caracteres, distintas entre sí                                                      |
+| `JWT_EXPIRES_IN` / `REFRESH_TOKEN_TTL_DAYS`       | `15m` / `7`                       |                                                                                          |
+| `CORS_ORIGIN`                                     | `http://localhost:5174`           | Obligatoria en producción                                                                |
+| `TRUST_PROXY`                                     | `0`                               | `1` detrás de un balanceador                                                             |
+| `METRICS_TOKEN`                                   | vacío (= `/metrics` responde 404) | ≥ 16 caracteres                                                                          |
+| `SHUTDOWN_TIMEOUT_MS` / `SHUTDOWN_DRAIN_DELAY_MS` | `10000` / `0`                     |                                                                                          |
+| `RATE_LIMIT_SCALE`                                | `1`                               | Solo pruebas de carga; prohibido en producción                                           |
+| `AI_PROVIDER`                                     | `mock`                            | `anthropic` exige `ANTHROPIC_API_KEY` y `VOYAGE_API_KEY`; `mock` prohibido en producción |
+| `ANTHROPIC_MODEL` / `ANTHROPIC_CLASSIFIER_MODEL`  | `claude-opus-5-5`                 | Ver [ADR 0005](docs/adr/0005-proveedor-de-ia-intercambiable.md)                          |
+| `VOYAGE_MODEL`                                    | `voyage-3.5`                      | Embeddings de 1024 dimensiones                                                           |
+| `RAG_TOP_K` / `RAG_MIN_SCORE`                     | `4` / 0.2 (mock), 0.45 (Voyage)   | El de Voyage está **sin calibrar** ([docs/rag.md](docs/rag.md))                          |
+| `AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER`              | `60000`                           | Tope diario de tokens por cliente                                                        |
+| `WORKER_CONCURRENCY` / `WORKER_METRICS_PORT`      | `2` / `9465`                      |                                                                                          |
 
-## API (Fase 2)
+## API
 
 Todas las rutas bajo `/api` exigen `Authorization: Bearer <accessToken>`, salvo
 `/api/auth/login`, `/refresh` y `/logout`. Errores: `{ error, details? }`; los de
@@ -108,6 +124,10 @@ validación traen `details: [{ field, message }]` en español.
 | `POST /api/conversations/:id/take`                            | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                      |
 | `POST /api/conversations/:id/close`                           | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                            |
 | `POST /api/conversations/:id/messages`                        | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                |
+| `POST /api/widget/sessions`                                   | público (cliente)                        | Sesión anónima: `{ displayName? }` → `{ token: "wgt_…" }`                 |
+| `GET` · `POST /api/widget/conversations`                      | cliente (`Bearer wgt_…`)                 | Sus conversaciones (máx. 3 abiertas)                                      |
+| `GET /api/widget/conversations/:id/messages`                  | el cliente dueño                         | Historial (sin el análisis de IA ni datos internos)                       |
+| `POST /api/widget/conversations/:id/messages`                 | el cliente dueño                         | `{ content, clientMsgId? }` → motor conversacional: respuesta o traspaso  |
 | `GET /health` · `GET /ready`                                  | sondas                                   | Liveness / readiness (Postgres + Redis)                                   |
 | `GET /metrics`                                                | `Bearer METRICS_TOKEN`                   | Prometheus                                                                |
 
@@ -132,7 +152,22 @@ Una sola regla en `src/modules/conversations/conversations.access.ts` (ver
 | Mensajes de agente  | usuario                     | 60 / min                                           |
 | Escrituras de admin | usuario                     | 120 / 15 min                                       |
 
-Los endpoints de IA (Fase 3) tendrán su propio límite por cliente desde el primer commit.
+| Sesiones del widget | IP | 20 / hora |
+| Mensajes a la IA | sesión del widget | 12 / min |
+| Tokens de IA | cliente | `AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER` en 24 h |
+
+## IA: RAG, intención y escalamiento
+
+Detalle completo en [docs/rag.md](docs/rag.md): flujo de un turno, las 7 reglas de
+escalamiento, las capas de aislamiento del RAG, las pruebas de mutación y la calibración.
+
+- **Proveedor** intercambiable (`AI_PROVIDER`): `mock` determinista por defecto; `anthropic`
+  (Claude + Voyage) implementado y probado con clientes simulados, **no contra el proveedor real**.
+- **Motor único** para texto y voz (`handleCustomerTurn`, [ADR 0007](docs/adr/0007-motor-conversacional-independiente-del-canal.md)).
+- **Aislamiento del RAG** garantizado también por la base (trigger de la migración 013,
+  [ADR 0006](docs/adr/0006-aislamiento-del-rag.md)).
+- **Escalamiento** sin duplicados (índice único parcial + `ON CONFLICT DO NOTHING`), con aviso a
+  los agentes disponibles por Redis pub/sub (canal `atencion-ia:staff-events`).
 
 ## Observabilidad
 
@@ -141,7 +176,9 @@ Los endpoints de IA (Fase 3) tendrán su propio límite por cliente desde el pri
   credenciales, cookies, secretos y **el contenido de los mensajes**. En desarrollo se
   ven con colores; en producción, JSON.
 - **Métricas** Prometheus en `/metrics` (con token): duración HTTP por ruta como patrón
-  (nunca ids), eventos de autenticación y de conversaciones, métricas del proceso.
+  (nunca ids), eventos de autenticación y de conversaciones, latencia y tokens de IA por
+  proveedor y operación, escalamientos por motivo, similitud del RAG, trabajos por cola.
+  El worker expone las suyas en `WORKER_METRICS_PORT`.
 - **Sondas**: `/health` no consulta dependencias; `/ready` sí, y responde 503 durante el
   apagado.
 - **Apagado ordenado** (SIGTERM/SIGINT): readiness 503 → drenaje → cierre HTTP esperando
@@ -158,10 +195,15 @@ npm test
 ```
 
 Recrean una base `atencion_ia_test` aplicando las migraciones **reales** del repo hermano
-(con sus CHECKs e índices parciales). Redis se simula. 95 tests: unitarios (política de
+(con sus CHECKs e índices parciales). Redis y las colas se simulan. 199 tests en 23 archivos: unitarios (política de
 contraseñas, bloqueo, tokens, acceso, versionado de la KB, paginación, redacción de logs,
-apagado) y de integración (sesión completa, bloqueo, CSRF, rate limit, aislamiento entre
-agentes, carreras al tomar, idempotencia, KB, staff, sondas y métricas).
+apagado, reglas de escalamiento, proveedor mock, adaptadores de Claude y Voyage con clientes
+simulados, prompt injection, fragmentación) y de integración (sesión completa, CSRF, rate limit,
+aislamiento entre agentes y entre clientes, carreras, idempotencia, KB, staff, motor
+conversacional, aislamiento del RAG, indexación, avisos, sondas y métricas).
+
+Además: `npm run test:shuffle` (orden aleatorio: sin dependencias ocultas entre tests) y
+`npm run test:mutations` (13/13 reglas críticas rotas a propósito son detectadas).
 
 ## Probarlo a mano (cmd.exe, con el seed cargado)
 
