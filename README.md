@@ -13,6 +13,7 @@ resolver (fraude, cliente molesto, pide un humano…) la conversación se escala
 | 3    | IA: proveedor intercambiable (`AI_PROVIDER=mock` por defecto), RAG, intención/sentimiento, escalamiento     | ✅     |
 | 4    | WebSocket de tiempo real (solo recepción), sesión del widget en cookie httpOnly, frontend                   | ✅     |
 | 5    | Voz: señalización WebRTC, STT/TTS (`VOICE_PROVIDER=mock`), mismo motor, retención                           | ✅     |
+| 6    | Pruebas de carga (con mejora medida), modelo de amenazas STRIDE, GitHub Actions                             | ✅     |
 
 ## Stack
 
@@ -61,24 +62,25 @@ Producción local (compilado): `npm run build` y luego `npm start`.
 
 ## Scripts
 
-| Comando                       | Qué hace                                                                      |
-| ----------------------------- | ----------------------------------------------------------------------------- |
-| `npm run dev`                 | Servidor con recarga automática (tsx)                                         |
-| `npm run build` / `npm start` | Compila a `dist/` / ejecuta lo compilado                                      |
-| `npm test`                    | Tests unitarios y de integración (recrea la base `atencion_ia_test`)          |
-| `npm run lint`                | ESLint + Prettier (verificación, no modifica)                                 |
-| `npm run format`              | Aplica Prettier                                                               |
-| `npm run typecheck`           | `tsc` del código y de los tests                                               |
-| `npm run prisma:pull`         | Re-introspecciona el esquema tras una migración nueva                         |
-| `scripts\verify.bat`          | lint → typecheck → tests → build (lo mismo que la CI)                         |
-| `npm run worker`              | Worker de colas: indexación del RAG y avisos de escalamiento (tsx)            |
-| `npm run worker:start`        | Worker compilado (tras `npm run build`)                                       |
-| `npm run kb:reindex`          | Re-indexa TODA la KB para el RAG, sin necesitar el worker                     |
-| `npm run rag:calibrate`       | Mide la calidad del RAG y ayuda a elegir `RAG_MIN_SCORE`                      |
-| `npm run test:shuffle`        | Tests en orden aleatorio (detecta dependencias entre tests)                   |
-| `npm run test:mutations`      | Rompe a propósito cada regla crítica y exige que los tests fallen             |
-| `npm run voice:demo`          | Llamada de voz de demo por consola contra la API ([guía](docs/demo-fase5.md)) |
-| `npm run voice:purge`         | Purga las transcripciones vencidas (lo mismo que el worker cada hora)         |
+| Comando                                                                 | Qué hace                                                                      |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `npm run dev`                                                           | Servidor con recarga automática (tsx)                                         |
+| `npm run build` / `npm start`                                           | Compila a `dist/` / ejecuta lo compilado                                      |
+| `npm test`                                                              | Tests unitarios y de integración (recrea la base `atencion_ia_test`)          |
+| `npm run lint`                                                          | ESLint + Prettier (verificación, no modifica)                                 |
+| `npm run format`                                                        | Aplica Prettier                                                               |
+| `npm run typecheck`                                                     | `tsc` del código y de los tests                                               |
+| `npm run prisma:pull`                                                   | Re-introspecciona el esquema tras una migración nueva                         |
+| `scripts\verify.bat`                                                    | lint → typecheck → tests → build (lo mismo que la CI)                         |
+| `npm run worker`                                                        | Worker de colas: indexación del RAG y avisos de escalamiento (tsx)            |
+| `npm run worker:start`                                                  | Worker compilado (tras `npm run build`)                                       |
+| `npm run kb:reindex`                                                    | Re-indexa TODA la KB para el RAG, sin necesitar el worker                     |
+| `npm run rag:calibrate`                                                 | Mide la calidad del RAG y ayuda a elegir `RAG_MIN_SCORE`                      |
+| `npm run test:shuffle`                                                  | Tests en orden aleatorio (detecta dependencias entre tests)                   |
+| `npm run test:mutations`                                                | Rompe a propósito cada regla crítica y exige que los tests fallen             |
+| `npm run voice:demo`                                                    | Llamada de voz de demo por consola contra la API ([guía](docs/demo-fase5.md)) |
+| `npm run voice:purge`                                                   | Purga las transcripciones vencidas (lo mismo que el worker cada hora)         |
+| `npm run loadtest:setup` · `loadtest:messages` · `loadtest:escalations` | Pruebas de carga ([loadtests/README.md](loadtests/README.md))                 |
 
 ## Configuración (`.env`)
 
@@ -265,7 +267,7 @@ npm test
 ```
 
 Recrean una base `atencion_ia_test` aplicando las migraciones **reales** del repo hermano
-(con sus CHECKs e índices parciales). Redis y las colas se simulan. 277 tests en 27 archivos: unitarios (política de
+(con sus CHECKs e índices parciales). Redis y las colas se simulan. 280 tests en 27 archivos: unitarios (política de
 contraseñas, bloqueo, tokens, acceso, versionado de la KB, paginación, redacción de logs,
 apagado, reglas de escalamiento, proveedor mock, adaptadores de Claude y Voyage con clientes
 simulados, prompt injection, fragmentación) y de integración (sesión completa, CSRF, rate limit,
@@ -276,7 +278,21 @@ y de voz (proveedores mock y Deepgram con dobles, llamada completa con el motor 
 señalización entre llamadas e instancias, permisos, topes, gracia, barrido y purga).
 
 Además: `npm run test:shuffle` (orden aleatorio: sin dependencias ocultas entre tests) y
-`npm run test:mutations` (38/38 reglas críticas rotas a propósito son detectadas).
+`npm run test:mutations` (39/39 reglas críticas rotas a propósito son detectadas).
+
+**CI** (`.github/workflows/ci.yml`, en cada push):
+
+- lint, typecheck, tests, tests en orden aleatorio y build contra un Postgres de servicio, con las
+  migraciones del repo `atencion-ia-database`;
+- las pruebas de mutación, en un job aparte;
+- `npm audit` de las dependencias de producción y gitleaks sobre todo el historial.
+
+**Carga:** [docs/load-test-report.md](docs/load-test-report.md). Con una IA de 300 ms por llamada,
+el turno pasó de ~1050 a ~732 ms y el throughput de ~45 a ~67 req/s al paralelizar la
+clasificación y la búsqueda en la KB. Un perfil de CPU y el log de SQL explican el resto.
+
+**Seguridad:** [docs/threat-model.md](docs/threat-model.md) (STRIDE). Cada amenaza cita su
+mitigación, el test o la mutación que la cubre y el riesgo que queda.
 
 ## Probarlo a mano (cmd.exe, con el seed cargado)
 

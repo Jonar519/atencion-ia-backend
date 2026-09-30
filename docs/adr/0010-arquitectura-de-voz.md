@@ -75,7 +75,7 @@ transcripción alimente la misma función conversacional de la Fase 3.
 
 **Evidencia.**
 
-- `tests/integration/voice.test.ts` (32 pruebas) cubre:
+- `tests/integration/voice.test.ts` (33 pruebas) cubre:
   - llamada completa con el motor real;
   - aislamiento de la señalización entre llamadas y entre instancias;
   - permisos de cliente y agente;
