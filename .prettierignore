@@ -3,3 +3,6 @@ dist/
 coverage/
 package-lock.json
 prisma/schema.prisma
+# En CI, el repo de la base se descarga DENTRO de este workspace (para las migraciones):
+# no es código de este repo y tiene su propio formato.
+atencion-ia-database/

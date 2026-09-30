@@ -5,7 +5,8 @@ const prettier = require("eslint-config-prettier");
 const globals = require("globals");
 
 module.exports = tseslint.config(
-  { ignores: ["dist/", "node_modules/", "coverage/"] },
+  // atencion-ia-database/: en CI se descarga dentro del workspace solo por las migraciones.
+  { ignores: ["dist/", "node_modules/", "coverage/", "atencion-ia-database/"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
