@@ -1,0 +1,63 @@
+{
+  "measuredAt": "2026-09-30T04:03:01.653Z",
+  "api": "http://localhost:4300",
+  "machine": {
+    "cpu": "AMD Ryzen 9 7900 12-Core Processor",
+    "logicalCpus": 24,
+    "ramGb": 31.1,
+    "os": "Windows_NT 10.0.26200",
+    "node": "v24.13.1"
+  },
+  "scenario": "Ráfaga de escalamientos con agentes conectados",
+  "burst": {
+    "customers": 199,
+    "agentsListening": 20,
+    "httpTotalMs": 1410,
+    "httpLatencyMs": {
+      "count": 199,
+      "p50": 1273.5,
+      "p95": 1384.2,
+      "p99": 1396.3,
+      "max": 1396.6
+    },
+    "statusCodes": {
+      "201": 199
+    }
+  },
+  "delivery": {
+    "note": "Tiempo desde que cada cliente envió su turno hasta que el aviso llegó a CADA agente conectado.",
+    "queueEventMs": {
+      "count": 3980,
+      "p50": 1285.9,
+      "p95": 1375.4,
+      "p99": 1396.6,
+      "max": 1400.8
+    },
+    "workerEscalationEventMs": {
+      "count": 3980,
+      "p50": 680,
+      "p95": 901.3,
+      "p99": 941.1,
+      "max": 943
+    },
+    "expectedPerAgent": 200,
+    "perAgentMin": {
+      "queueEventsForBurst": 199,
+      "escalationEvents": 200
+    },
+    "duplicatedEscalationEventsTotal": 0
+  },
+  "race": {
+    "concurrentTurns": 30,
+    "statusCodes": {
+      "201": 30
+    },
+    "escalationEventsPerAgent": [1]
+  },
+  "database": {
+    "conversationsWithEscalation": 200,
+    "conversationsWithoutEscalation": 0,
+    "conversationsWithMoreThanOne": 0,
+    "raceConversationEscalations": 1
+  }
+}

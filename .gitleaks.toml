@@ -1,0 +1,12 @@
+# Configuración de gitleaks (la usa la CI: job "security").
+# Reglas por defecto + una lista blanca MÍNIMA: solo valores SINTÉTICOS de prueba,
+# escritos a propósito en el código de las pruebas (nunca credenciales reales).
+# Se exceptúa el VALOR exacto, no el archivo: un secreto real en ese mismo archivo
+# seguiría detectándose.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Contraseña sintética de los agentes de las pruebas de carga (solo existe en la base de carga)"
+regexes = ['''Carga-Sintetica-Solo-Pruebas-2026''']

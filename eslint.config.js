@@ -21,9 +21,9 @@ module.exports = tseslint.config(
     },
   },
   {
-    // Herramientas de línea de comandos (kb:reindex, rag:calibrate, test:mutations): su salida ES
+    // Herramientas de línea de comandos (kb:reindex, rag:calibrate, test:mutations, pruebas de carga): su salida ES
     // el reporte en la terminal. El código del servidor sigue obligado a usar pino (con redacción).
-    files: ["scripts/**", "src/scripts/**"],
+    files: ["scripts/**", "src/scripts/**", "loadtests/**"],
     languageOptions: { globals: globals.node },
     rules: { "no-console": "off" },
   },

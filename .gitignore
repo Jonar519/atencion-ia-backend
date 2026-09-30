@@ -10,3 +10,6 @@ Thumbs.db
 
 # Pruebas de carga: estado local (cuentas sintéticas)
 loadtests/.state.json
+
+# Estado local de las pruebas de carga (tokens de sesiones sintéticas)
+loadtests/.state.json

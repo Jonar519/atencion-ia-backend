@@ -25,7 +25,10 @@
     "test:shuffle": "vitest run --sequence.shuffle",
     "test:mutations": "node scripts/mutation-check.mjs",
     "voice:purge": "tsx src/scripts/purgeVoice.ts",
-    "voice:demo": "tsx src/scripts/voiceDemo.ts"
+    "voice:demo": "tsx src/scripts/voiceDemo.ts",
+    "loadtest:setup": "node loadtests/setup.mjs",
+    "loadtest:messages": "node loadtests/messages.mjs",
+    "loadtest:escalations": "node loadtests/escalations.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
@@ -57,6 +60,7 @@
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.1",
+    "autocannon": "^8.0.0",
     "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.12.0",

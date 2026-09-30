@@ -1,0 +1,33 @@
+{
+  "measuredAt": "2026-09-30T04:01:30.021Z",
+  "api": "http://localhost:4300",
+  "machine": {
+    "cpu": "AMD Ryzen 9 7900 12-Core Processor",
+    "logicalCpus": 24,
+    "ramGb": 31.1,
+    "os": "Windows_NT 10.0.26200",
+    "node": "v24.13.1"
+  },
+  "scenario": "Envío masivo de mensajes al asistente",
+  "aiMockLatencyMs": "300",
+  "result": {
+    "name": "messages",
+    "connections": 50,
+    "durationSeconds": 20.14,
+    "requests": 900,
+    "throughputRps": 44.7,
+    "latencyMs": {
+      "count": 900,
+      "p50": 1052.9,
+      "p95": 1180.1,
+      "p99": 1277.3,
+      "max": 1302.2
+    },
+    "statusCodes": {
+      "201": 900
+    },
+    "socketErrors": 0,
+    "timeouts": 0,
+    "errorRate": 0
+  }
+}
