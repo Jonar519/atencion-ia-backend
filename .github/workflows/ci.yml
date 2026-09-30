@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint, typecheck, tests y build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Postgres + pgvector para los tests de integración (recrean la base
+    # atencion_ia_test con las migraciones REALES). Redis y las colas están
+    # simulados en los tests; la IA y la voz usan el proveedor mock.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/atencion_ia_test
+      MIGRATIONS_DIR: ${{ github.workspace }}/atencion-ia-database/migrations
+      # prisma generate lee el schema, que referencia env("DATABASE_URL").
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/atencion_ia_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # El esquema vive en atencion-ia-database (dueño de las migraciones).
+      # Es público; si fuera privado: secret DATABASE_REPO_TOKEN (PAT de solo lectura).
+      # Rama: variable de repositorio DATABASE_REPO_REF (por defecto main).
+      - name: Checkout de las migraciones (atencion-ia-database)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/atencion-ia-database
+          ref: ${{ vars.DATABASE_REPO_REF || 'main' }}
+          token: ${{ secrets.DATABASE_REPO_TOKEN || github.token }}
+          path: atencion-ia-database
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Tests en orden aleatorio (sin dependencias ocultas entre tests)
+        run: npm run test:shuffle
+      - run: npm run build
+
+  # Pruebas de mutación: rompen a propósito cada regla crítica (aislamiento del
+  # RAG, permisos, WebSocket, voz…) y exigen que algún test falle. Tardan más:
+  # corren en un job aparte, en paralelo con el principal.
+  mutations:
+    name: Pruebas de mutación
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/atencion_ia_test
+      MIGRATIONS_DIR: ${{ github.workspace }}/atencion-ia-database/migrations
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/atencion_ia_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/atencion-ia-database
+          ref: ${{ vars.DATABASE_REPO_REF || 'main' }}
+          token: ${{ secrets.DATABASE_REPO_TOKEN || github.token }}
+          path: atencion-ia-database
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run test:mutations
+
+  # Seguridad de la cadena de suministro y del repositorio:
+  #  - npm audit de las dependencias de PRODUCCIÓN (falla con severidad moderada o mayor);
+  #  - gitleaks sobre todo el historial (falla si encuentra secretos).
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: npm audit (dependencias de producción)
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: gitleaks (secretos en el historial)
+        run: docker run --rm -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:v8.21.2 git /repo --redact --verbose
