@@ -281,6 +281,13 @@ const MUTATIONS = [
     to: '    case "call.updated":\n    case "call.transcript.partial":\n      return { ...event };',
     tests: ["tests/unit/audience.test.ts", "tests/integration/voice.test.ts"],
   },
+  {
+    name: "Rendimiento: clasificar y buscar en la KB vuelven a ir en serie (una espera de proveedor más por turno)",
+    file: "src/modules/engine/conversationEngine.ts",
+    from: "    ai.classifier.classify(input.content),",
+    to: "    await ai.classifier.classify(input.content),",
+    tests: ["tests/integration/engine.test.ts"],
+  },
 ];
 
 function runTests(files) {

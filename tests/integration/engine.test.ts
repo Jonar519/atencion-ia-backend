@@ -113,7 +113,11 @@ describe("escalamiento", () => {
     const kinds = (await prisma.aiUsage.findMany({ where: { conversationId: chat.conversationId } })).map(
       (u) => u.kind
     );
-    expect(kinds).toEqual(["classification"]);
+    // Sin respuesta del modelo ("chat"): lo caro no se gasta. La búsqueda en la KB
+    // (un embedding, barato) corre EN PARALELO con la clasificación para bajar la
+    // latencia de cada turno, así que también se cuenta (docs/load-test-report.md).
+    expect(kinds.sort()).toEqual(["classification", "embedding"]);
+    expect(kinds).not.toContain("chat");
   });
 
   it("aparece en la cola del panel de agentes, ordenada por prioridad", async () => {
@@ -204,6 +208,40 @@ describe("escalamiento", () => {
 });
 
 describe("robustez del turno", () => {
+  it("clasificar y buscar en la KB corren EN PARALELO (el cliente espera una llamada menos)", async () => {
+    const mock = createMockProvider();
+    const delay = <T>(ms: number, value: () => Promise<T>) =>
+      new Promise<T>((resolve, reject) => setTimeout(() => value().then(resolve, reject), ms));
+    const calls: string[] = [];
+    setAiForTests({
+      provider: "mock",
+      chat: mock.chat,
+      classifier: {
+        classify: (text) => {
+          calls.push("classify:start");
+          return delay(200, () => mock.classifier.classify(text));
+        },
+      },
+      embedder: {
+        model: mock.embedder.model,
+        embed: (texts, kind) => {
+          calls.push(`embed:${kind}:start`);
+          return delay(200, () => mock.embedder.embed(texts, kind));
+        },
+      },
+    });
+    const chat = await newChat();
+    const started = Date.now();
+    const res = await sendCustomerMessage(chat.token, chat.conversationId, "¿Cuál es el horario de atención?");
+    const elapsed = Date.now() - started;
+    expect(res.status).toBe(201);
+    expect(res.body.reply).not.toBeNull();
+    // Ambas empiezan antes de que termine cualquiera de las dos.
+    expect(calls.slice(0, 2).sort()).toEqual(["classify:start", "embed:query:start"]);
+    // En serie serían ≥ 400 ms; en paralelo, ~200 ms más la base.
+    expect(elapsed).toBeLessThan(380);
+  });
+
   it("idempotente: el mismo clientMsgId dos veces no duplica el mensaje ni la respuesta ni el consumo", async () => {
     const chat = await newChat();
     const clientMsgId = randomUUID();

@@ -57,6 +57,19 @@ export async function publishMessagesCreated(conversationId: string, messageIds:
   }
 }
 
+/**
+ * Publica mensajes que el llamador YA tiene en memoria (el motor, justo después
+ * de crearlos), con el estado de la conversación leído tras confirmar. Evita
+ * volver a leerlos de la base en cada turno (docs/load-test-report.md).
+ */
+export async function publishMessages(conversation: ConversationRef, messages: RealtimeMessage[]): Promise<void> {
+  try {
+    for (const message of messages) await publishRealtime({ type: "message.created", conversation, message });
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "No se pudieron publicar los mensajes");
+  }
+}
+
 export async function publishConversationUpdated(
   conversationId: string,
   previous: Pick<ConversationRef, "status" | "assignedAgentId"> | null

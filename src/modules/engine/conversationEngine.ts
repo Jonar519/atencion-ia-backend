@@ -9,7 +9,8 @@ import { assertWithinBudget, usageRows, type UsageRecord } from "./budget.servic
 import { decideEscalation, handoffMessage, type EscalationDecision } from "./escalationRules";
 import { escalate } from "./escalation.service";
 import { loadHistory } from "./history";
-import { publishConversationUpdated, publishMessagesCreated } from "../../realtime/publish";
+import { publishConversationUpdated, publishMessages } from "../../realtime/publish";
+import type { RealtimeMessage } from "../../realtime/events";
 
 /**
  * MOTOR CONVERSACIONAL: procesa UN turno del cliente, venga de donde venga.
@@ -23,7 +24,11 @@ import { publishConversationUpdated, publishMessagesCreated } from "../../realti
  *  1. Idempotencia por clientMsgId (un reenvío no se procesa dos veces).
  *  2. Tope diario de IA del cliente.
  *  3. Clasificación del turno (intención, sentimiento) → se guarda con el mensaje.
- *  4. Si la conversación está con la IA: RAG (solo la KB publicada) + historial
+ *     En PARALELO, si la conversación está con la IA, la búsqueda en la KB (RAG):
+ *     son independientes, y así el cliente espera una llamada al proveedor menos
+ *     (docs/load-test-report.md). Si el turno termina escalando, esa búsqueda
+ *     se "desperdicia" (un embedding: barato).
+ *  4. Si la conversación sigue con la IA: RAG (solo la KB publicada) + historial
  *     de ESTA conversación → respuesta.
  *  5. Reglas de escalamiento. Si corresponde: escalamiento (sin duplicados),
  *     mensaje de traspaso y aviso a los agentes.
@@ -68,6 +73,45 @@ export interface TurnResult {
 
 export { PUBLIC_MESSAGE_FIELDS };
 
+/**
+ * Lo que el motor lee al CREAR sus mensajes. Sin la relación senderAgent (el
+ * motor nunca crea mensajes de agente): así Prisma no necesita un SELECT extra
+ * tras cada INSERT (medido con log_statement: docs/load-test-report.md).
+ */
+const ENGINE_MESSAGE_FIELDS = {
+  id: true,
+  senderType: true,
+  channel: true,
+  content: true,
+  createdAt: true,
+  clientMsgId: true,
+} satisfies Prisma.MessageSelect;
+
+type EngineMessage = Prisma.MessageGetPayload<{ select: typeof ENGINE_MESSAGE_FIELDS }>;
+
+function asPublic(message: EngineMessage): PublicMessage {
+  return { ...message, senderAgent: null };
+}
+
+function toRealtime(
+  conversationId: string,
+  message: PublicMessage,
+  classification: Classification | null
+): RealtimeMessage {
+  return {
+    id: message.id,
+    conversationId,
+    senderType: message.senderType,
+    channel: message.channel,
+    content: message.content,
+    createdAt: message.createdAt.toISOString(),
+    clientMsgId: message.clientMsgId,
+    agent: null,
+    intent: classification?.intent ?? null,
+    sentiment: classification?.sentiment ?? null,
+  };
+}
+
 export async function handleCustomerTurn(input: CustomerTurnInput): Promise<TurnResult> {
   if (input.channel === "voice" && !input.callId) throw new ApiError(400, "Un turno de voz requiere la llamada");
 
@@ -103,14 +147,25 @@ export async function handleCustomerTurn(input: CustomerTurnInput): Promise<Turn
   const ai = getAi();
   const usage: UsageRecord[] = [];
 
-  // 3. Clasificación. Si falla, el turno sigue sin análisis (no se pierde el mensaje).
+  const withAi = conversation.status === "ai_active";
+
+  // 3. Clasificación y (si la IA atiende) búsqueda en la KB, EN PARALELO.
+  // Si la clasificación falla, el turno sigue sin análisis (no se pierde el mensaje).
+  const [classified, retrieved] = await Promise.allSettled([
+    ai.classifier.classify(input.content),
+    withAi ? retrieveKnowledge(input.content) : Promise.resolve(null),
+  ]);
   let classification: Classification | null = null;
-  try {
-    const result = await ai.classifier.classify(input.content);
+  if (classified.status === "fulfilled") {
+    const result = classified.value;
     classification = { intent: result.intent, sentiment: result.sentiment, confidence: result.confidence };
     usage.push({ kind: "classification", model: result.model, usage: result.usage });
-  } catch (err) {
+  } else {
+    const err: unknown = classified.reason;
     logger.warn({ err: err instanceof Error ? err.name : String(err) }, "Clasificación no disponible para el turno");
+  }
+  if (retrieved.status === "fulfilled" && retrieved.value) {
+    usage.push({ kind: "embedding", model: ai.embedder.model, usage: retrieved.value.usage });
   }
 
   const customerMessage = await saveCustomerMessage(input, classification);
@@ -130,7 +185,6 @@ export async function handleCustomerTurn(input: CustomerTurnInput): Promise<Turn
   }
 
   const history = await loadHistory(conversation.id, customerMessage.id);
-  const withAi = conversation.status === "ai_active";
 
   // 4. Respuesta con RAG (solo si la conversación sigue con la IA).
   let kbChunks: KbContextChunk[] = [];
@@ -151,9 +205,8 @@ export async function handleCustomerTurn(input: CustomerTurnInput): Promise<Turn
   // Si ya se sabe que escala (fraude, pide humano, enojo…), no se gasta una respuesta del modelo.
   if (withAi && !preDecision.escalate) {
     try {
-      const retrieval = await retrieveKnowledge(input.content);
-      usage.push({ kind: "embedding", model: ai.embedder.model, usage: retrieval.usage });
-      kbChunks = retrieval.chunks;
+      if (retrieved.status === "rejected") throw retrieved.reason;
+      kbChunks = retrieved.value?.chunks ?? [];
       kbSupportFound = kbChunks.length > 0;
 
       const started = Date.now();
@@ -195,34 +248,38 @@ export async function handleCustomerTurn(input: CustomerTurnInput): Promise<Turn
 
   // Qué ve el cliente: la respuesta de la IA, o el aviso de traspaso si escaló
   // estando con la IA. Con un humano a cargo, nada (le responde el agente).
+  // El consumo se guarda en la MISMA transacción de la respuesta (una ida y vuelta menos).
+  const usageData = usage.length
+    ? usageRows(usage, { customerId: input.customerId, conversationId: conversation.id, callId: input.callId })
+    : [];
   let reply: PublicMessage | null = null;
   if (withAi && decision.escalate && escalationInfo?.created) {
-    reply = await saveReply(input, { senderType: "system", content: handoffMessage(decision.reason) });
+    reply = await saveReply(input, { senderType: "system", content: handoffMessage(decision.reason) }, usageData);
   } else if (withAi && replyText) {
-    reply = await saveReply(input, {
-      senderType: "ai",
-      content: replyText,
-      model: replyModel,
-      latencyMs: replyLatencyMs,
-      citations: kbChunks,
-    });
+    reply = await saveReply(
+      input,
+      { senderType: "ai", content: replyText, model: replyModel, latencyMs: replyLatencyMs, citations: kbChunks },
+      usageData
+    );
+  } else if (usageData.length) {
+    await prisma.aiUsage.createMany({ data: usageData });
   }
 
-  if (usage.length) {
-    await prisma.aiUsage.createMany({
-      data: usageRows(usage, { customerId: input.customerId, conversationId: conversation.id, callId: input.callId }),
-    });
-  }
-
+  // Estado de la conversación DESPUÉS del turno, leído una sola vez: decide
+  // quién recibe los eventos (realtime/audience.ts) y lo que responde la API.
   const after = await prisma.conversation.findUniqueOrThrow({
     where: { id: conversation.id },
-    select: { status: true },
+    select: { id: true, customerId: true, status: true, assignedAgentId: true, priority: true },
   });
 
   // Tiempo real (después de confirmar todo): el mensaje del cliente, la respuesta
   // o el traspaso, y el cambio de estado si escaló. Llega al cliente (sus otras
   // pestañas) y a los agentes que pueden ver la conversación (realtime/audience.ts).
-  await publishMessagesCreated(conversation.id, [customerMessage.id, ...(reply ? [reply.id] : [])]);
+  // Los mensajes se publican con lo que el motor ya tiene: no se vuelven a leer.
+  await publishMessages(after, [
+    toRealtime(conversation.id, customerMessage, classification),
+    ...(reply ? [toRealtime(conversation.id, reply, null)] : []),
+  ]);
   if (after.status !== conversation.status) {
     await publishConversationUpdated(conversation.id, { status: conversation.status, assignedAgentId: null });
   }
@@ -257,10 +314,10 @@ async function saveCustomerMessage(input: CustomerTurnInput, classification: Cla
           sentiment: classification?.sentiment ?? null,
           analysisConfidence: classification?.confidence ?? null,
         },
-        select: PUBLIC_MESSAGE_FIELDS,
+        select: ENGINE_MESSAGE_FIELDS,
       });
       await tx.conversation.update({ where: { id: input.conversationId }, data: { lastMessageAt: message.createdAt } });
-      return message;
+      return asPublic(message);
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002" && input.clientMsgId) return null;
@@ -276,7 +333,8 @@ async function saveReply(
     model?: string | null;
     latencyMs?: number | null;
     citations?: KbContextChunk[];
-  }
+  },
+  usage: Prisma.AiUsageCreateManyInput[] = []
 ) {
   return prisma.$transaction(async (tx) => {
     const message = await tx.message.create({
@@ -301,9 +359,10 @@ async function saveReply(
             }
           : undefined,
       },
-      select: PUBLIC_MESSAGE_FIELDS,
+      select: ENGINE_MESSAGE_FIELDS,
     });
     await tx.conversation.update({ where: { id: input.conversationId }, data: { lastMessageAt: message.createdAt } });
-    return message;
+    if (usage.length) await tx.aiUsage.createMany({ data: usage });
+    return asPublic(message);
   });
 }
