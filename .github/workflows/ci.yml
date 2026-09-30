@@ -39,20 +39,20 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/atencion_ia_test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # El esquema vive en atencion-ia-database (dueño de las migraciones).
       # Es público; si fuera privado: secret DATABASE_REPO_TOKEN (PAT de solo lectura).
       # Rama: variable de repositorio DATABASE_REPO_REF (por defecto main).
       - name: Checkout de las migraciones (atencion-ia-database)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/atencion-ia-database
           ref: ${{ vars.DATABASE_REPO_REF || 'main' }}
           token: ${{ secrets.DATABASE_REPO_TOKEN || github.token }}
           path: atencion-ia-database
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -92,14 +92,14 @@ jobs:
       MIGRATIONS_DIR: ${{ github.workspace }}/atencion-ia-database/migrations
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/atencion_ia_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/atencion-ia-database
           ref: ${{ vars.DATABASE_REPO_REF || 'main' }}
           token: ${{ secrets.DATABASE_REPO_TOKEN || github.token }}
           path: atencion-ia-database
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -114,10 +114,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - name: npm audit (dependencias de producción)
