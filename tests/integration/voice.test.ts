@@ -22,6 +22,7 @@ import { createMockProvider } from "../../src/services/ai/mock.provider";
 import { callsService, PURGED_PLACEHOLDER } from "../../src/modules/voice/calls.service";
 import { CONSENT_VERSION } from "../../src/modules/voice/consent";
 import { tone } from "../../src/services/voice/pcm";
+import { flushAudit } from "../../src/services/audit/audit.service";
 
 /**
  * Voz de punta a punta: servidor HTTP real, WebSockets reales (/ws y /ws/voice),
@@ -456,6 +457,25 @@ describe("llamada completa: voz → MISMO motor conversacional → voz", () => {
 });
 
 describe("aislamiento entre llamadas y participantes", () => {
+  it("iniciar, unirse y colgar quedan auditados, SIN nada de lo dicho", async () => {
+    const { callId, customerId, socket } = await customerInCall();
+    await escalate(socket);
+    const agent = await staffSession("agent");
+    await request(app).post(`/api/calls/${callId}/join`).set(authHeader(agent.token)).expect(200);
+    await request(app).post(`/api/calls/${callId}/end`).set(authHeader(agent.token)).expect(204);
+    await flushAudit();
+    const rows = await prisma.auditLog.findMany({
+      where: { entityType: "call", entityId: callId },
+      orderBy: { id: "asc" },
+    });
+    expect(rows.map((r) => [r.action, r.actorType, r.actorId])).toEqual([
+      ["call.start", "customer", customerId],
+      ["call.join", "staff", agent.staff.id],
+      ["call.end", "staff", agent.staff.id],
+    ]);
+    expect(JSON.stringify(rows.map((r) => r.metadata))).not.toMatch(/reconozco|450.000/);
+  });
+
   it("la señalización de una llamada NUNCA llega a otra llamada", async () => {
     const callA = await customerInCall();
     const callB = await customerInCall();

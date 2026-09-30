@@ -156,3 +156,29 @@ describe("historial de mensajes", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("auditoría de las acciones del agente", () => {
+  it("ver, tomar, responder y cerrar quedan registrados con su autor, SIN el texto del mensaje", async () => {
+    const { flushAudit } = await import("../../src/services/audit/audit.service");
+    const { staff, token } = await staffSession("agent");
+    const { conversation } = await createConversation("waiting_agent");
+    await request(app).get(`/api/conversations/${conversation.id}`).set(authHeader(token)).expect(200);
+    await post(token, `/api/conversations/${conversation.id}/take`).expect(200);
+    await post(token, `/api/conversations/${conversation.id}/messages`, {
+      content: "Tu clave NUNCA te la pediremos",
+    }).expect(201);
+    await post(token, `/api/conversations/${conversation.id}/close`, { reason: "resolved_by_agent" }).expect(200);
+    await flushAudit();
+    const rows = await prisma.auditLog.findMany({
+      where: { entityType: "conversation", entityId: conversation.id },
+      orderBy: { id: "asc" },
+    });
+    expect(rows.map((r) => [r.action, r.actorId])).toEqual([
+      ["conversation.view", staff.id],
+      ["conversation.take", staff.id],
+      ["conversation.message", staff.id],
+      ["conversation.close", staff.id],
+    ]);
+    expect(JSON.stringify(rows.map((r) => r.metadata))).not.toContain("NUNCA");
+  });
+});
