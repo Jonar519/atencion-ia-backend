@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { hkdfSync } from "crypto";
 import { z } from "zod";
 
 /**
@@ -112,6 +113,28 @@ const schema = z
     // Servidores STUN/TURN para WebRTC, como JSON (RTCIceServer[]). Vacío = sin ICE externo
     // (funciona en la misma máquina o red local; en redes reales hace falta un TURN).
     ICE_SERVERS: z.string().default("[]"),
+
+    // --- Identidad del staff (Fase 7) ---
+    // Clave de 32 bytes (base64) para cifrar los secretos TOTP en la base. OBLIGATORIA en producción;
+    // en desarrollo y pruebas, si falta, se deriva de JWT_SECRET con HKDF (contexto propio).
+    MFA_ENCRYPTION_KEY: z.string().optional(),
+    // URL pública del frontend: los enlaces de los correos apuntan aquí.
+    APP_BASE_URL: z.string().url().default("http://localhost:5174"),
+    // Correo: "mock" (por defecto) guarda lo "enviado" en la tabla email_outbox; "smtp" envía de verdad.
+    EMAIL_PROVIDER: z.enum(["mock", "smtp"]).default("mock"),
+    SMTP_URL: z.string().optional(),
+    EMAIL_FROM: z.string().default("Banco Cordillera <no-responder@cordillera.example>"),
+    // Ubicación aproximada de las sesiones: "mock" (por defecto) o "dbip" (archivo .mmdb LOCAL, sin servicio externo).
+    GEO_PROVIDER: z.enum(["mock", "dbip"]).default("mock"),
+    GEO_DB_PATH: z.string().optional(),
+    // Archivos (avatar, adjuntos): "local" (por defecto, carpeta fuera del repo) o "s3" (compatible con S3).
+    STORAGE_PROVIDER: z.enum(["local", "s3"]).default("local"),
+    STORAGE_LOCAL_DIR: z.string().default("../atencion-ia-storage"),
+    S3_BUCKET: z.string().optional(),
+    S3_REGION: z.string().default("us-east-1"),
+    S3_ENDPOINT: z.string().url().optional(),
+    S3_ACCESS_KEY_ID: z.string().optional(),
+    S3_SECRET_ACCESS_KEY: z.string().optional(),
   })
   .superRefine((value, ctx) => {
     if (value.JWT_SECRET === value.IP_HASH_SECRET) {
@@ -147,6 +170,34 @@ const schema = z
         path: ["VOICE_PROVIDER"],
         message: "mock simula la voz: no puede usarse con NODE_ENV=production",
       });
+    }
+    if (value.MFA_ENCRYPTION_KEY !== undefined && Buffer.from(value.MFA_ENCRYPTION_KEY, "base64").length !== 32) {
+      ctx.addIssue({ code: "custom", path: ["MFA_ENCRYPTION_KEY"], message: "Debe ser 32 bytes en base64" });
+    }
+    if (isProduction && !value.MFA_ENCRYPTION_KEY) {
+      ctx.addIssue({ code: "custom", path: ["MFA_ENCRYPTION_KEY"], message: "Obligatoria en producción" });
+    }
+    if (value.EMAIL_PROVIDER === "smtp" && !value.SMTP_URL) {
+      ctx.addIssue({ code: "custom", path: ["SMTP_URL"], message: "Obligatoria con EMAIL_PROVIDER=smtp" });
+    }
+    if (isProduction && value.EMAIL_PROVIDER === "mock") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["EMAIL_PROVIDER"],
+        message: "mock no envía correos: no puede usarse en producción",
+      });
+    }
+    if (value.GEO_PROVIDER === "dbip" && !value.GEO_DB_PATH) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["GEO_DB_PATH"],
+        message: "Obligatoria con GEO_PROVIDER=dbip (ruta al .mmdb)",
+      });
+    }
+    if (value.STORAGE_PROVIDER === "s3") {
+      for (const key of ["S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"] as const) {
+        if (!value[key]) ctx.addIssue({ code: "custom", path: [key], message: "Obligatoria con STORAGE_PROVIDER=s3" });
+      }
     }
     const ice = iceServersSchema.safeParse(safeJson(value.ICE_SERVERS));
     if (!ice.success) {
@@ -227,5 +278,26 @@ export const env = {
     reconnectGraceMs: e.VOICE_RECONNECT_GRACE_MS,
     connectTimeoutMs: e.VOICE_CONNECT_TIMEOUT_MS,
     iceServers: iceServersSchema.parse(JSON.parse(e.ICE_SERVERS)),
+  },
+
+  identity: {
+    // 32 bytes. Si no se configuró (solo fuera de producción), se deriva de JWT_SECRET.
+    mfaEncryptionKey: e.MFA_ENCRYPTION_KEY
+      ? Buffer.from(e.MFA_ENCRYPTION_KEY, "base64")
+      : Buffer.from(hkdfSync("sha256", e.JWT_SECRET, "atencion-ia", "mfa-secret-at-rest-v1", 32)),
+    appBaseUrl: e.APP_BASE_URL.replace(/\/$/, ""),
+  },
+  email: { provider: e.EMAIL_PROVIDER, smtpUrl: e.SMTP_URL, from: e.EMAIL_FROM },
+  geo: { provider: e.GEO_PROVIDER, dbPath: e.GEO_DB_PATH },
+  storage: {
+    provider: e.STORAGE_PROVIDER,
+    localDir: e.STORAGE_LOCAL_DIR,
+    s3: {
+      bucket: e.S3_BUCKET,
+      region: e.S3_REGION,
+      endpoint: e.S3_ENDPOINT,
+      accessKeyId: e.S3_ACCESS_KEY_ID,
+      secretAccessKey: e.S3_SECRET_ACCESS_KEY,
+    },
   },
 };
