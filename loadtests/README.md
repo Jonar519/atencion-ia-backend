@@ -24,6 +24,9 @@ El `createdb` solo hace falta la primera vez. Luego indexa la KB del seed, desde
 set DATABASE_URL=postgresql://postgres:postgres@localhost:5434/atencion_ia_load
 set REDIS_URL=redis://localhost:6380/2
 npm run kb:reindex
+REM Fase 7: el admin del seed debe enrolarse en la verificación en dos pasos;
+REM loadtest:setup completa ese flujo (QR → código TOTP) si la cuenta no la tiene.
+npm run staff:reset-mfa -- admin@cordillera.example
 ```
 
 ## 2. API y worker de carga (dos ventanas de cmd, desde `atencion-ia-backend`)

@@ -3,7 +3,7 @@
 //  - BURST clientes más, con conversación nueva, reservados para la ráfaga de escalamientos.
 //  - AGENTS agentes sintéticos (los crea el admin del seed) que escuchan por WebSocket.
 // Todo se guarda en loadtests/.state.json (ignorado por git).
-import { api, PASSWORD, SEED_ADMIN, staffLogin, writeState } from "./lib.mjs";
+import { adminLogin, api, PASSWORD, writeState } from "./lib.mjs";
 
 const SESSIONS = Number(process.env.LOADTEST_SESSIONS || 100);
 const BURST = Number(process.env.LOADTEST_BURST || 200);
@@ -28,7 +28,7 @@ const tag = Date.now().toString(36);
 const sessions = await inBatches(SESSIONS, 20, (i) => customer(`Carga ${i}`));
 const burst = await inBatches(BURST, 20, (i) => customer(`Ráfaga ${i}`));
 
-const adminToken = await staffLogin(SEED_ADMIN.email, SEED_ADMIN.password);
+const adminToken = await adminLogin();
 const agents = await inBatches(AGENTS, 10, async (i) => {
   const email = `carga-${tag}-${i}@load.example`;
   await api("POST", "/api/staff", {

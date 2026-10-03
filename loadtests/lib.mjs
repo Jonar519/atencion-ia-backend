@@ -1,5 +1,6 @@
 // Utilidades comunes de las pruebas de carga (ver loadtests/README.md).
 import autocannon from "autocannon";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +47,50 @@ export async function api(method, url, { token, body } = {}) {
 
 export async function staffLogin(email, password = PASSWORD) {
   return (await api("POST", "/api/auth/login", { body: { email, password } })).accessToken;
+}
+
+/** TOTP de 6 dígitos (RFC 6238, SHA-1, 30 s) para completar el enrolamiento del admin. */
+function totp(secret, timeMs = Date.now()) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0;
+  let value = 0;
+  const bytes = [];
+  for (const char of secret.replace(/[\s=]/g, "").toUpperCase()) {
+    value = (value << 5) | alphabet.indexOf(char);
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 255);
+      bits -= 8;
+    }
+  }
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(timeMs / 30_000)));
+  const hmac = crypto.createHmac("sha1", Buffer.from(bytes)).update(counter).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  return String((hmac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+
+/**
+ * Login del admin del seed. Desde la Fase 7 un admin necesita verificación en
+ * dos pasos: con la base de carga recién preparada (y tras
+ * `npm run staff:reset-mfa -- admin@cordillera.example`) el login pide
+ * enrolarse, y aquí se completa ese flujo real.
+ */
+export async function adminLogin({ email, password } = SEED_ADMIN) {
+  const first = await api("POST", "/api/auth/login", { body: { email, password } });
+  if (first.accessToken) return first.accessToken;
+  if (first.mfaRequired) {
+    throw new Error(
+      "El admin ya tiene MFA en la base de carga: corre antes npm run staff:reset-mfa -- admin@cordillera.example (con DATABASE_URL de la base de carga)."
+    );
+  }
+  const { secret } = await api("POST", "/api/auth/mfa/enroll/start", {
+    body: { enrollmentToken: first.enrollmentToken },
+  });
+  const done = await api("POST", "/api/auth/mfa/enroll/confirm", {
+    body: { enrollmentToken: first.enrollmentToken, code: totp(secret) },
+  });
+  return done.accessToken;
 }
 
 /** Percentil exacto (método nearest-rank) de una lista ORDENADA. */
