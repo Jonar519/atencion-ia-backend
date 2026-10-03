@@ -1,9 +1,9 @@
 // Datos sintéticos para las pruebas de carga (npm run loadtest:setup).
 //  - SESSIONS clientes del widget, cada uno con su conversación (envío masivo).
 //  - BURST clientes más, con conversación nueva, reservados para la ráfaga de escalamientos.
-//  - AGENTS agentes sintéticos (los crea el admin del seed) que escuchan por WebSocket.
+//  - AGENTS agentes sintéticos (los INVITA el admin del seed y completan su cuenta) que escuchan por WebSocket.
 // Todo se guarda en loadtests/.state.json (ignorado por git).
-import { adminLogin, api, PASSWORD, writeState } from "./lib.mjs";
+import { adminLogin, api, invitationTokenFor, PASSWORD, writeState } from "./lib.mjs";
 
 const SESSIONS = Number(process.env.LOADTEST_SESSIONS || 100);
 const BURST = Number(process.env.LOADTEST_BURST || 200);
@@ -28,12 +28,17 @@ const tag = Date.now().toString(36);
 const sessions = await inBatches(SESSIONS, 20, (i) => customer(`Carga ${i}`));
 const burst = await inBatches(BURST, 20, (i) => customer(`Ráfaga ${i}`));
 
+// Bloque F2: el ÚNICO camino para tener cuenta es la invitación. El admin invita, el enlace se lee del
+// correo simulado (email_outbox de la base de CARGA) y el agente completa su cuenta con su contraseña.
 const adminToken = await adminLogin();
 const agents = await inBatches(AGENTS, 10, async (i) => {
   const email = `carga-${tag}-${i}@load.example`;
-  await api("POST", "/api/staff", {
+  await api("POST", "/api/staff/invitations", {
     token: adminToken,
-    body: { name: `Agente de carga ${i}`, email, password: PASSWORD, role: "agent", maxConcurrent: 20 },
+    body: { name: `Agente de carga ${i}`, email, role: "agent", maxConcurrent: 20 },
+  });
+  await api("POST", "/api/auth/invitation/accept", {
+    body: { token: invitationTokenFor(email), password: PASSWORD },
   });
   return email;
 });

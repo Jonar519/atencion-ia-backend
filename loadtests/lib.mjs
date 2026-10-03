@@ -1,6 +1,7 @@
 // Utilidades comunes de las pruebas de carga (ver loadtests/README.md).
 import autocannon from "autocannon";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,27 @@ export const ORIGIN = process.env.LOADTEST_ORIGIN || "http://localhost:5174";
 export const PASSWORD = "Carga-Sintetica-Solo-Pruebas-2026";
 // Cuenta de administrador del seed (datos de prueba públicos del repo de base de datos).
 export const SEED_ADMIN = { email: "admin@cordillera.example", password: "Password123!" };
+
+// Base de CARGA (nunca la de desarrollo): de ahí se leen los correos simulados de las invitaciones.
+export const LOAD_DB = process.env.LOADTEST_DB || "atencion_ia_load";
+const PG_CONTAINER = process.env.LOADTEST_PG_CONTAINER || "atencion_ia_postgres";
+
+/**
+ * Token de la última invitación enviada a `email` (bloque F2). Con EMAIL_PROVIDER=mock el correo
+ * queda en email_outbox; se lee con psql DENTRO del contenedor (no hace falta psql en Windows).
+ */
+export function invitationTokenFor(email) {
+  if (LOAD_DB === "atencion_ia") throw new Error("Las pruebas de carga nunca usan la base de desarrollo.");
+  const sql =
+    `SELECT body_text FROM email_outbox WHERE to_address = '${email.replace(/'/g, "''")}' ` +
+    `AND template = 'invitation' ORDER BY id DESC LIMIT 1`;
+  const body = execFileSync("docker", ["exec", PG_CONTAINER, "psql", "-U", "postgres", "-d", LOAD_DB, "-tAc", sql], {
+    encoding: "utf8",
+  });
+  const match = body.match(/[?&]token=([^\s&]+)/);
+  if (!match) throw new Error(`No hay correo de invitación para ${email} en ${LOAD_DB}`);
+  return decodeURIComponent(match[1]);
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const RESULTS_DIR = path.join(here, "results");
