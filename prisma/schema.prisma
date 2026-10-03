@@ -10,44 +10,60 @@ datasource db {
 }
 
 model StaffUser {
-  id                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name                  String            @db.VarChar(150)
-  email                 String            @unique(map: "uq_staff_users_email") @db.VarChar(254)
-  passwordHash          String            @map("password_hash") @db.VarChar(255)
-  role                  StaffRole         @default(agent)
-  availability          AgentAvailability @default(offline)
-  maxConcurrent         Int               @default(3) @map("max_concurrent") @db.SmallInt
-  isActive              Boolean           @default(true) @map("is_active")
-  lastLoginAt           DateTime?         @map("last_login_at") @db.Timestamptz(6)
-  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt             DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
-  callParticipations    CallParticipant[]
-  handledCalls          Call[]
-  assignedConversations Conversation[]
-  assignedEscalations   Escalation[]
-  createdArticles       KbArticle[]       @relation("kb_articles_created_byTostaff_users")
-  updatedArticles       KbArticle[]       @relation("kb_articles_updated_byTostaff_users")
-  sentMessages          Message[]
-  refreshTokens         RefreshToken[]
+  id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                   String            @db.VarChar(150)
+  email                  String            @unique(map: "uq_staff_users_email") @db.VarChar(254)
+  passwordHash           String            @map("password_hash") @db.VarChar(255)
+  role                   StaffRole         @default(agent)
+  availability           AgentAvailability @default(offline)
+  maxConcurrent          Int               @default(3) @map("max_concurrent") @db.SmallInt
+  isActive               Boolean           @default(true) @map("is_active")
+  lastLoginAt            DateTime?         @map("last_login_at") @db.Timestamptz(6)
+  createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
+  phone                  String?           @db.VarChar(30)
+  theme                  String            @default("system") @db.VarChar(10)
+  avatarStorageKey       String?           @map("avatar_storage_key") @db.VarChar(300)
+  /// Secreto TOTP CIFRADO (AES-256-GCM, src/modules/auth/mfaCrypto.ts). Nunca en claro.
+  mfaSecretEncrypted     String?           @map("mfa_secret_encrypted")
+  mfaEnabledAt           DateTime?         @map("mfa_enabled_at") @db.Timestamptz(6)
+  mfaLastUsedStep        BigInt?           @map("mfa_last_used_step")
+  deletedAt              DateTime?         @map("deleted_at") @db.Timestamptz(6)
+  callParticipations     CallParticipant[]
+  handledCalls           Call[]
+  assignedConversations  Conversation[]
+  outboxEmails           EmailOutbox[]
+  assignedEscalations    Escalation[]
+  createdArticles        KbArticle[]       @relation("kb_articles_created_byTostaff_users")
+  updatedArticles        KbArticle[]       @relation("kb_articles_updated_byTostaff_users")
+  sentMessages           Message[]
+  mfaBackupCodes         MfaBackupCode[]
+  refreshTokens          RefreshToken[]
+  tokens                 StaffToken[]
+  createdCannedResponses CannedResponse[]  @relation("canned_created_by")
+  updatedCannedResponses CannedResponse[]  @relation("canned_updated_by")
 
   @@map("staff_users")
 }
 
 model RefreshToken {
-  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  staffUserId  String         @map("staff_user_id") @db.Uuid
-  familyId     String         @map("family_id") @db.Uuid
-  tokenHash    String         @unique(map: "uq_refresh_tokens_hash") @map("token_hash") @db.Char(64)
-  expiresAt    DateTime       @map("expires_at") @db.Timestamptz(6)
-  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  revokedAt    DateTime?      @map("revoked_at") @db.Timestamptz(6)
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  staffUserId   String         @map("staff_user_id") @db.Uuid
+  familyId      String         @map("family_id") @db.Uuid
+  tokenHash     String         @unique(map: "uq_refresh_tokens_hash") @map("token_hash") @db.Char(64)
+  expiresAt     DateTime       @map("expires_at") @db.Timestamptz(6)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  revokedAt     DateTime?      @map("revoked_at") @db.Timestamptz(6)
   /// rotated | logout | reuse_detected | expired (CHECK en la base)
-  revokeReason String?        @map("revoke_reason") @db.VarChar(30)
-  replacedById String?        @map("replaced_by") @db.Uuid
-  userAgent    String?        @map("user_agent") @db.VarChar(200)
-  replacedBy   RefreshToken?  @relation("refresh_tokensTorefresh_tokens", fields: [replacedById], references: [id], onUpdate: NoAction)
-  replaces     RefreshToken[] @relation("refresh_tokensTorefresh_tokens")
-  staffUser    StaffUser      @relation(fields: [staffUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  revokeReason  String?        @map("revoke_reason") @db.VarChar(30)
+  replacedById  String?        @map("replaced_by") @db.Uuid
+  userAgent     String?        @map("user_agent") @db.VarChar(200)
+  /// IP TRUNCADA (x.y.z.0 o /48), nunca la completa (CHECK en la base).
+  ipAddress     String?        @map("ip_address") @db.VarChar(45)
+  locationLabel String?        @map("location_label") @db.VarChar(120)
+  replacedBy    RefreshToken?  @relation("refresh_tokensTorefresh_tokens", fields: [replacedById], references: [id], onUpdate: NoAction)
+  replaces      RefreshToken[] @relation("refresh_tokensTorefresh_tokens")
+  staffUser     StaffUser      @relation(fields: [staffUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([expiresAt], map: "idx_refresh_tokens_expires")
   @@index([familyId], map: "idx_refresh_tokens_family")
@@ -142,6 +158,8 @@ model Message {
   transcriptSegments   CallTranscriptSegment[]
   triggeredEscalations Escalation[]
   citations            MessageCitation[]
+  /// Adjunto (imagen o PDF), a lo sumo UNO: la base lo impone (UNIQUE message_id, 017); Prisma lo modela como lista por la FK compuesta.
+  attachments          MessageAttachment[]
   call                 Call?                   @relation(fields: [callId, conversationId], references: [id, conversationId], onDelete: NoAction, onUpdate: NoAction, map: "fk_messages_call")
   conversation         Conversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   senderAgent          StaffUser?              @relation(fields: [senderAgentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -349,6 +367,53 @@ model SchemaMigration {
   @@map("schema_migrations")
 }
 
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model EmailOutbox {
+  id             BigInt     @id @default(autoincrement())
+  toAddress      String     @map("to_address") @db.VarChar(254)
+  subject        String     @db.VarChar(200)
+  bodyText       String     @map("body_text")
+  template       String     @db.VarChar(40)
+  relatedStaffId String?    @map("related_staff_id") @db.Uuid
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  relatedStaff   StaffUser? @relation(fields: [relatedStaffId], references: [id], onUpdate: NoAction)
+
+  @@index([createdAt(sort: Desc)], map: "idx_email_outbox_created")
+  @@map("email_outbox")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model MfaBackupCode {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  staffUserId String    @map("staff_user_id") @db.Uuid
+  codeHash    String    @map("code_hash") @db.Char(64)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(6)
+  staffUser   StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([staffUserId, codeHash], map: "uq_mfa_backup_codes")
+  @@map("mfa_backup_codes")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// Tokens de UN SOLO USO (recuperación, cambio de correo, desafío y enrolamiento de MFA).
+/// La base impone a lo sumo UNO sin usar por propósito y persona (índice único parcial).
+model StaffToken {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  staffUserId String    @map("staff_user_id") @db.Uuid
+  purpose     String    @db.VarChar(20)
+  tokenHash   String    @unique(map: "uq_staff_tokens_hash") @map("token_hash") @db.Char(64)
+  newEmail    String?   @map("new_email") @db.VarChar(254)
+  attempts    Int       @default(0) @db.SmallInt
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(6)
+  staffUser   StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([expiresAt], map: "idx_staff_tokens_expires")
+  @@map("staff_tokens")
+}
+
 enum ActorType {
   staff
   customer
@@ -502,4 +567,47 @@ enum StaffRole {
   agent
 
   @@map("staff_role")
+}
+
+/// Respuestas predefinidas del panel (migración 016). Marcadores {cliente} y {asesor}: los reemplaza el navegador.
+model CannedResponse {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title     String     @db.VarChar(80)
+  body      String
+  shortcut  String?    @db.VarChar(30)
+  isActive  Boolean    @default(true) @map("is_active")
+  createdBy String?    @map("created_by") @db.Uuid
+  updatedBy String?    @map("updated_by") @db.Uuid
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime   @default(now()) @map("updated_at") @db.Timestamptz(6)
+  creator   StaffUser? @relation("canned_created_by", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  updater   StaffUser? @relation("canned_updated_by", fields: [updatedBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("canned_responses")
+}
+
+/// Adjunto del chat (migración 017). El archivo vive en el almacenamiento; original_name es solo para
+/// mostrarlo y NUNCA se envía a la IA (lo controla quien sube el archivo).
+model MessageAttachment {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId      String   @unique(map: "uq_message_attachments_message") @map("message_id") @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  storageKey     String   @unique @map("storage_key") @db.VarChar(300)
+  contentType    String   @map("content_type") @db.VarChar(40)
+  sizeBytes      Int      @map("size_bytes")
+  originalName   String   @map("original_name") @db.VarChar(150)
+  sha256         String   @db.Char(64)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  message        Message  @relation(fields: [messageId, conversationId], references: [id, conversationId], onDelete: Cascade, onUpdate: NoAction, map: "fk_message_attachments_message")
+
+  @@index([conversationId], map: "idx_message_attachments_conversation")
+  @@map("message_attachments")
+}
+
+/// Archivos por borrar del almacenamiento (los encola un trigger al borrar un adjunto).
+model StorageDeletion {
+  storageKey  String   @id @map("storage_key") @db.VarChar(300)
+  requestedAt DateTime @default(now()) @map("requested_at") @db.Timestamptz(6)
+
+  @@map("storage_deletions")
 }
