@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { staffController } from "./staff.controller";
+import { profileController } from "../profile/profile.controller";
 import { availabilitySchemaBody, createStaffSchema, updateStaffSchema } from "./staff.schema";
 import { authMiddleware } from "../../middlewares/auth.middleware";
 import { requireRole } from "../../middlewares/role.middleware";
@@ -18,6 +19,9 @@ staffRouter.patch(
   asyncHandler(staffController.setMyAvailability)
 );
 
+// Cualquier miembro del staff: el avatar de un compañero (el panel lo muestra).
+staffRouter.get("/:id/avatar", validate({ params: uuidParams("id") }), asyncHandler(profileController.getAvatar));
+
 // Solo admin: gestión de cuentas.
 staffRouter.get("/", requireRole("admin"), asyncHandler(staffController.list));
 staffRouter.post(
@@ -33,4 +37,18 @@ staffRouter.patch(
   adminWriteLimiter,
   validate({ params: uuidParams("id"), body: updateStaffSchema }),
   asyncHandler(staffController.update)
+);
+staffRouter.get(
+  "/:id/export",
+  requireRole("admin"),
+  adminWriteLimiter,
+  validate({ params: uuidParams("id") }),
+  asyncHandler(staffController.exportData)
+);
+staffRouter.post(
+  "/:id/anonymize",
+  requireRole("admin"),
+  adminWriteLimiter,
+  validate({ params: uuidParams("id") }),
+  asyncHandler(staffController.anonymize)
 );

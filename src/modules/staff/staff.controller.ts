@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { staffService } from "./staff.service";
+import { profileService } from "../profile/profile.service";
 import { audit } from "../../services/audit/audit.service";
 import { currentUser, routeParam } from "../../utils/params";
 
@@ -41,6 +42,23 @@ export const staffController = {
       entityId: staffId,
       metadata: { availability: staff.availability },
     });
+    res.json(staff);
+  },
+
+  /** Exportar los datos de un agente (admin), p. ej. antes de eliminar su cuenta. */
+  async exportData(req: Request, res: Response) {
+    const id = routeParam(req, "id");
+    await staffService.getPublic(id);
+    const data = await profileService.export(id);
+    audit(req, { action: "profile.export", entityType: "staff_user", entityId: id, metadata: { by: "admin" } });
+    res.set("Content-Disposition", `attachment; filename="agente-${id.slice(0, 8)}.json"`);
+    res.json(data);
+  },
+
+  async anonymize(req: Request, res: Response) {
+    const id = routeParam(req, "id");
+    const staff = await staffService.anonymize(currentUser(req).staffId, id);
+    audit(req, { action: "staff.anonymize", entityType: "staff_user", entityId: id });
     res.json(staff);
   },
 };

@@ -7,6 +7,8 @@ import { publishCallUpdated, publishConversationUpdated, publishMessagesCreated 
 import { publishVoice } from "../../realtime/bus";
 import type { AuthUser } from "../../middlewares/auth.middleware";
 import { canClose, canReply, conversationScope } from "./conversations.access";
+import { ATTACHMENT_PUBLIC_FIELDS } from "../engine/conversationEngine";
+import type { StoredAttachment } from "../attachments/attachments.service";
 import type {
   CloseConversationInput,
   ListConversationsQuery,
@@ -70,6 +72,7 @@ const MESSAGE_FIELDS = {
   clientMsgId: true,
   createdAt: true,
   senderAgent: { select: { id: true, name: true } },
+  attachments: { select: ATTACHMENT_PUBLIC_FIELDS },
   citations: {
     select: {
       rank: true,
@@ -101,6 +104,9 @@ export const conversationsService = {
     if (scope === "all" && user.role !== "admin") {
       throw new ApiError(403, "Solo un administrador puede ver todas las conversaciones");
     }
+    if (query.agentId && scope !== "all") {
+      throw new ApiError(400, "El filtro por agente solo se usa con scope=all (administrador)");
+    }
 
     if (scope === "queue") {
       // La cola es corta por naturaleza: se ordena por urgencia, no por fecha,
@@ -116,6 +122,7 @@ export const conversationsService = {
 
     const where: Prisma.ConversationWhereInput = {
       ...(scope === "mine" ? { assignedAgentId: user.staffId } : {}),
+      ...(query.agentId ? { assignedAgentId: query.agentId } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...afterCursor("lastMessageAt", query.cursor),
     };
@@ -261,6 +268,67 @@ export const conversationsService = {
     return result.item;
   },
 
+  /**
+   * Reasignar (solo admin) una conversación atendida a OTRO agente activo.
+   * Es el paso previo obligatorio para eliminar la cuenta de un agente
+   * (docs/data-retention.md). Mismas garantías que "tomar": se bloquea la fila
+   * del agente destino (respeta su máximo) y el UPDATE va condicionado al
+   * agente actual (si cambió mientras tanto, 409).
+   * No se reasigna con una llamada en curso atendida por el agente actual:
+   * primero debe salir de la llamada (el audio no se transfiere en caliente).
+   */
+  async reassign(id: string, toAgentId: string) {
+    const result = await prisma.$transaction(async (tx) => {
+      const conversation = await tx.conversation.findUnique({
+        where: { id },
+        select: { status: true, assignedAgentId: true },
+      });
+      if (!conversation) throw new ApiError(404, NOT_FOUND);
+      if (conversation.status !== "agent_active" || !conversation.assignedAgentId) {
+        throw new ApiError(409, "Solo se reasignan conversaciones que un agente está atendiendo");
+      }
+      if (conversation.assignedAgentId === toAgentId) throw new ApiError(409, "Ese agente ya la atiende");
+
+      const [target] = await tx.$queryRaw<{ name: string; is_active: boolean; max_concurrent: number }[]>`
+        SELECT name, is_active, max_concurrent FROM staff_users WHERE id = ${toAgentId}::uuid FOR UPDATE`;
+      if (!target) throw new ApiError(404, "Agente no encontrado");
+      if (!target.is_active) throw new ApiError(409, "El agente destino está desactivado");
+      const active = await tx.conversation.count({ where: { assignedAgentId: toAgentId, status: "agent_active" } });
+      if (active >= target.max_concurrent) {
+        throw new ApiError(409, `El agente destino ya atiende ${active} conversaciones, su máximo.`);
+      }
+      const inCall = await tx.callParticipant.count({
+        where: { agentId: conversation.assignedAgentId, leftAt: null, call: { conversationId: id } },
+      });
+      if (inCall > 0) throw new ApiError(409, "El agente actual está en una llamada de esta conversación");
+
+      const now = await dbNow(tx);
+      const { count } = await tx.conversation.updateMany({
+        where: { id, status: "agent_active", assignedAgentId: conversation.assignedAgentId },
+        data: { assignedAgentId: toAgentId, lastMessageAt: now },
+      });
+      if (count === 0) throw new ApiError(409, "La conversación cambió mientras la reasignabas. Recárgala.");
+      await tx.escalation.updateMany({
+        where: { conversationId: id, status: "assigned" },
+        data: { assignedAgentId: toAgentId, assignedAt: now },
+      });
+      const note = await tx.message.create({
+        data: {
+          conversationId: id,
+          senderType: "system",
+          content: `${firstName(target.name)} continúa con la conversación.`,
+        },
+        select: { id: true },
+      });
+      const item = await tx.conversation.findUniqueOrThrow({ where: { id }, select: LIST_FIELDS }).then(toListItem);
+      return { item, noteId: note.id, fromAgentId: conversation.assignedAgentId };
+    });
+    // previous = el agente anterior: su panel deja de mostrarla y el nuevo la recibe.
+    await publishConversationUpdated(id, { status: "agent_active", assignedAgentId: result.fromAgentId });
+    await publishMessagesCreated(id, [result.noteId]);
+    return { ...result.item, fromAgentId: result.fromAgentId };
+  },
+
   async close(user: AuthUser, id: string, input: CloseConversationInput) {
     const conversation = await findVisible(user, id);
     if (!canClose(user, conversation)) {
@@ -321,7 +389,7 @@ export const conversationsService = {
    * mismo mensaje llega dos veces (reconexión, doble clic), se devuelve el
    * que ya existe con `created: false` en vez de duplicarlo.
    */
-  async sendAgentMessage(user: AuthUser, id: string, input: SendMessageInput) {
+  async sendAgentMessage(user: AuthUser, id: string, input: SendMessageInput, attachment?: StoredAttachment) {
     const conversation = await findVisible(user, id);
     if (!canReply(user, conversation)) {
       throw new ApiError(409, "Solo el agente que atiende la conversación puede responder. Tómala primero.");
@@ -346,6 +414,21 @@ export const conversationsService = {
             senderAgentId: user.staffId,
             content: input.content,
             clientMsgId: input.clientMsgId ?? null,
+            // Adjunto del asesor (bloque C): ya validado y guardado por quien llama.
+            ...(attachment
+              ? {
+                  attachments: {
+                    create: {
+                      id: attachment.id,
+                      storageKey: attachment.storageKey,
+                      contentType: attachment.contentType,
+                      sizeBytes: attachment.sizeBytes,
+                      originalName: attachment.originalName,
+                      sha256: attachment.sha256,
+                    },
+                  },
+                }
+              : {}),
           },
           select: MESSAGE_FIELDS,
         });

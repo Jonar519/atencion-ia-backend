@@ -10,6 +10,8 @@ export const listConversationsQuerySchema = paginationQuerySchema
     // Por defecto: "mine" para un agente, "all" para un admin.
     scope: z.enum(["mine", "queue", "all"]).optional(),
     status: statusSchema.optional(),
+    // Solo admin con scope=all: los casos de UN agente (para reasignarlos).
+    agentId: uuidSchema.optional(),
   })
   .strict();
 
@@ -34,3 +36,5 @@ export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema
 export type MessagesQuery = z.infer<typeof messagesQuerySchema>;
 export type CloseConversationInput = z.infer<typeof closeConversationSchema>;
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+export const reassignConversationSchema = z.object({ agentId: uuidSchema }).strict();

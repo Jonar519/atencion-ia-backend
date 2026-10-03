@@ -4,6 +4,9 @@ import { audit } from "../../services/audit/audit.service";
 import { currentUser, routeParam } from "../../utils/params";
 import { conversationEvents } from "../../observability/metrics";
 import type { ListConversationsQuery, MessagesQuery } from "./conversations.schema";
+import { readAttachmentMeta, sendAttachment } from "../attachments/attachments.http";
+import { attachmentForStaff, discardAttachment, storeAttachment } from "../attachments/attachments.service";
+import { ATTACHMENT_PLACEHOLDER } from "../attachments/fileChecks";
 
 export const conversationsController = {
   async list(req: Request, res: Response) {
@@ -31,6 +34,18 @@ export const conversationsController = {
     res.json(conversation);
   },
 
+  async reassign(req: Request, res: Response) {
+    const id = routeParam(req, "id");
+    const conversation = await conversationsService.reassign(id, req.body.agentId);
+    audit(req, {
+      action: "conversation.reassign",
+      entityType: "conversation",
+      entityId: id,
+      metadata: { from: conversation.fromAgentId, to: req.body.agentId },
+    });
+    res.json(conversation);
+  },
+
   async close(req: Request, res: Response) {
     const id = routeParam(req, "id");
     const conversation = await conversationsService.close(currentUser(req), id, req.body);
@@ -50,5 +65,40 @@ export const conversationsController = {
     // Sin el contenido del mensaje: solo que existió.
     if (created) audit(req, { action: "conversation.message", entityType: "conversation", entityId: id });
     res.status(created ? 201 : 200).json(message);
+  },
+
+  /** Adjunto del asesor: mismas reglas que responder (solo quien atiende el caso). */
+  async sendAttachment(req: Request, res: Response) {
+    const id = routeParam(req, "id");
+    const user = currentUser(req);
+    const meta = readAttachmentMeta(req);
+    const stored = await storeAttachment({ conversationId: id, data: req.body, declaredName: meta.fileName });
+    let result: Awaited<ReturnType<typeof conversationsService.sendAgentMessage>>;
+    try {
+      result = await conversationsService.sendAgentMessage(
+        user,
+        id,
+        { content: meta.caption ?? ATTACHMENT_PLACEHOLDER, clientMsgId: meta.clientMsgId },
+        stored
+      );
+    } catch (err) {
+      await discardAttachment(stored);
+      throw err;
+    }
+    if (!result.created) await discardAttachment(stored);
+    else
+      audit(req, {
+        action: "conversation.message",
+        entityType: "conversation",
+        entityId: id,
+        metadata: { attachment: true },
+      });
+    res.status(result.created ? 201 : 200).json(result.message);
+  },
+
+  /** Ver/descargar un adjunto: solo si puede ver la conversación (si no, 404). */
+  async attachment(req: Request, res: Response) {
+    const found = await attachmentForStaff(currentUser(req), routeParam(req, "id"), routeParam(req, "attachmentId"));
+    sendAttachment(res, found);
   },
 };
