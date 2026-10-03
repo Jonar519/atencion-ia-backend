@@ -7,7 +7,7 @@ import { ApiError } from "../../utils/apiError";
 import { getEmail } from "../../services/email";
 import { templates } from "../../services/email/templates";
 import { getStorage } from "../../services/storage";
-import { BCRYPT_COST } from "../auth/auth.service";
+import { BCRYPT_COST, passwordMatches } from "../auth/auth.service";
 import { mfaService } from "../auth/mfa.service";
 import { passwordProblems } from "../auth/passwordPolicy";
 import { sessionsService } from "../auth/sessions.service";
@@ -27,7 +27,6 @@ const PROFILE_FIELDS = {
   role: true,
   availability: true,
   phone: true,
-  theme: true,
   avatarStorageKey: true,
   mfaEnabledAt: true,
   lastLoginAt: true,
@@ -63,8 +62,8 @@ async function loadWithPassword(staffId: string) {
   return staff;
 }
 
-async function requirePassword(hash: string, password: string) {
-  if (!(await bcrypt.compare(password, hash))) throw new ApiError(400, "La contraseña actual no es correcta");
+async function requirePassword(hash: string | null, password: string) {
+  if (!(await passwordMatches(password, hash))) throw new ApiError(400, "La contraseña actual no es correcta");
 }
 
 export const profileService = {
@@ -129,7 +128,7 @@ export const profileService = {
     await requirePassword(staff.passwordHash, input.currentPassword);
     const problems = passwordProblems(input.newPassword, { email: staff.email, name: staff.name });
     if (problems.length) throw new ApiError(400, "La contraseña no cumple la política", problems);
-    if (await bcrypt.compare(input.newPassword, staff.passwordHash)) {
+    if (await passwordMatches(input.newPassword, staff.passwordHash)) {
       throw new ApiError(400, "La contraseña nueva debe ser distinta de la actual");
     }
     await prisma.staffUser.update({

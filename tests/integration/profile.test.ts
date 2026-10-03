@@ -49,24 +49,27 @@ describe("perfil propio", () => {
     const { token, staff } = await staffSession("agent");
     const res = await request(app).get("/api/profile").set(authHeader(token));
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: staff.id, theme: "system", mfaEnabled: false, hasAvatar: false });
+    expect(res.body).toMatchObject({ id: staff.id, mfaEnabled: false, hasAvatar: false });
+    // El tema lo decide el sistema operativo (019): no hay preferencia guardada que devolver.
+    expect(res.body).not.toHaveProperty("theme");
     expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|mfaSecret|avatarStorageKey|mfaLastUsedStep/);
     // /auth/me devuelve lo mismo (el frontend lo usa al recargar).
     const me = await request(app).get("/api/auth/me").set(authHeader(token));
     expect(me.body).toEqual(res.body);
   });
 
-  it("PATCH cambia nombre, teléfono y tema; valida el teléfono y rechaza campos no permitidos", async () => {
+  it("PATCH cambia nombre y teléfono; valida el teléfono y rechaza campos no permitidos (incluido el tema)", async () => {
     const { token } = await staffSession("agent");
     const ok = await request(app)
       .patch("/api/profile")
       .set(authHeader(token))
-      .send({ name: "Ana Pérez", phone: "+57 300 123 4567", theme: "dark" });
+      .send({ name: "Ana Pérez", phone: "+57 300 123 4567" });
     expect(ok.status).toBe(200);
-    expect(ok.body).toMatchObject({ name: "Ana Pérez", phone: "+57 300 123 4567", theme: "dark" });
+    expect(ok.body).toMatchObject({ name: "Ana Pérez", phone: "+57 300 123 4567" });
     const cleared = await request(app).patch("/api/profile").set(authHeader(token)).send({ phone: "" });
     expect(cleared.body.phone).toBeNull();
-    for (const body of [{ phone: "llámame" }, { theme: "azul" }, { role: "admin" }, { email: "x@y.example" }, {}]) {
+    // { theme: "dark" } ERA válido: desde la 019 el tema no se elige, así que también es un 400.
+    for (const body of [{ phone: "llámame" }, { theme: "dark" }, { role: "admin" }, { email: "x@y.example" }, {}]) {
       expect(
         (await request(app).patch("/api/profile").set(authHeader(token)).send(body)).status,
         JSON.stringify(body)

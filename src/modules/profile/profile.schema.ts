@@ -14,7 +14,7 @@ export const updateProfileSchema = z
     name: cleanText(2, 150).optional(),
     // null (o "") borra el teléfono.
     phone: z.union([phone, z.literal("").transform(() => null), z.null()]).optional(),
-    theme: z.enum(["system", "light", "dark"]).optional(),
+    // Sin "theme": el tema lo decide el sistema operativo (migración 019); .strict() lo rechaza con 400.
   })
   .strict()
   .refine((data) => Object.keys(data).length > 0, { message: "No hay campos para actualizar" });

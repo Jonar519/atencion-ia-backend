@@ -40,7 +40,7 @@ export type RevokeReason =
   "logout" | "reuse_detected" | "password_reset" | "password_changed" | "revoked_by_user" | "account_deleted";
 
 type SessionStaff = Pick<StaffUser, "id" | "name" | "email" | "role" | "availability"> &
-  Partial<Pick<StaffUser, "theme" | "mfaEnabledAt" | "avatarStorageKey">>;
+  Partial<Pick<StaffUser, "mfaEnabledAt" | "avatarStorageKey">>;
 
 export function publicStaff(staff: SessionStaff) {
   return {
@@ -49,7 +49,6 @@ export function publicStaff(staff: SessionStaff) {
     email: staff.email,
     role: staff.role,
     availability: staff.availability,
-    theme: staff.theme ?? "system",
     mfaEnabled: Boolean(staff.mfaEnabledAt),
     hasAvatar: Boolean(staff.avatarStorageKey),
   };
