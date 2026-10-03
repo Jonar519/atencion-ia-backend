@@ -111,3 +111,36 @@ export const callStartLimiter = limiter(
 export const callStaffLimiter = limiter("call-staff", MINUTE, 30, "Demasiadas acciones sobre llamadas seguidas.", {
   keyGenerator: byUser,
 });
+
+/** Segundo paso del login (MFA), por IP. El bloqueo por cuenta lo lleva lockout.service. */
+export const mfaLimiter = limiter("mfa", 15 * MINUTE, 20, "Demasiados intentos de verificación. Espera 15 minutos.");
+
+/**
+ * "Olvidé mi contraseña" y confirmar enlaces, por IP: cada solicitud genera un
+ * correo (no se debe poder usar la API para inundar la bandeja de alguien).
+ */
+export const passwordResetLimiter = limiter(
+  "password-reset",
+  60 * MINUTE,
+  10,
+  "Demasiadas solicitudes de recuperación. Espera una hora."
+);
+
+/** Cambios en el propio perfil (datos, correo, contraseña, avatar, MFA, sesiones). */
+export const profileWriteLimiter = limiter("profile-write", 15 * MINUTE, 60, "Demasiados cambios seguidos.", {
+  keyGenerator: byUser,
+});
+
+/**
+ * Subida de adjuntos (bloque C): cada uno ocupa almacenamiento. Por sesión del
+ * widget o por miembro del staff; 30 por hora alcanza para una conversación real.
+ */
+export const attachmentUploadLimiter = limiter(
+  "attachment-upload",
+  60 * MINUTE,
+  30,
+  "Adjuntaste demasiados archivos seguidos. Espera un momento.",
+  {
+    keyGenerator: (req: Request) => req.widget?.sessionId ?? req.user?.staffId ?? ipKeyGenerator(req.ip ?? ""),
+  }
+);

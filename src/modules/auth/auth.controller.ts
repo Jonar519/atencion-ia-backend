@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
-import { AccountLockedError, authService } from "./auth.service";
+import { AccountLockedError, InvalidMfaCodeError, authService } from "./auth.service";
 import {
+  ClientInfo,
   REFRESH_COOKIE,
   REFRESH_COOKIE_PATH,
   RefreshReuseError,
@@ -8,13 +9,14 @@ import {
   refreshCookieOptions,
   sessionsService,
 } from "./sessions.service";
-import { staffService } from "../staff/staff.service";
+import { RESET_REQUESTED, passwordService } from "./password.service";
+import { profileService } from "../profile/profile.service";
 import { audit } from "../../services/audit/audit.service";
 import { ApiError } from "../../utils/apiError";
 import { authEvents } from "../../observability/metrics";
 import { currentUser } from "../../utils/params";
 
-function readRefreshCookie(req: Request): string | undefined {
+export function readRefreshCookie(req: Request): string | undefined {
   const header = req.headers.cookie;
   if (!header) return undefined;
   // Parseo mínimo del header Cookie: solo interesa una cookie conocida.
@@ -35,40 +37,98 @@ function clearRefreshCookie(res: Response) {
   res.clearCookie(REFRESH_COOKIE, { ...options, path: REFRESH_COOKIE_PATH });
 }
 
+/** Desde dónde se conecta (panel de sesiones). req.ip ya respeta TRUST_PROXY. */
+export const clientOf = (req: Request): ClientInfo => ({ ip: req.ip, userAgent: req.get("user-agent") });
+
 /** Access token en el cuerpo; refresh token SOLO en la cookie httpOnly (nunca en el JSON). */
-function sendSession(res: Response, session: SessionResult) {
+function sendSession(res: Response, session: SessionResult, extra: Record<string, unknown> = {}) {
   res.cookie(REFRESH_COOKIE, session.refreshToken, refreshCookieOptions());
-  res.status(200).json({ accessToken: session.accessToken, staff: session.staff });
+  res.status(200).json({ accessToken: session.accessToken, staff: session.staff, ...extra });
+}
+
+function auditLoginSuccess(req: Request, staffId: string, mfa: boolean) {
+  audit(req, {
+    action: "auth.login_success",
+    actorId: staffId,
+    entityType: "staff_user",
+    entityId: staffId,
+    metadata: { mfa },
+  });
+  authEvents.inc({ event: "login_success" });
+}
+
+/** Fallos de login y de MFA: contador + auditoría SIN el correo (solo HMAC de la IP y el user agent). */
+function auditFailure(req: Request, err: unknown) {
+  if (err instanceof AccountLockedError) {
+    authEvents.inc({ event: "login_locked" });
+    audit(req, { action: "auth.login_locked", actorId: null });
+  } else if (err instanceof InvalidMfaCodeError) {
+    authEvents.inc({ event: "mfa_failure" });
+    audit(req, { action: "auth.mfa_failure", actorId: null });
+  } else if (err instanceof ApiError && err.statusCode === 401) {
+    authEvents.inc({ event: "login_failure" });
+    audit(req, { action: "auth.login_failure", actorId: null });
+  }
 }
 
 export const authController = {
   async login(req: Request, res: Response) {
     try {
-      const session = await authService.login(req.body, req.get("user-agent"));
-      audit(req, {
-        action: "auth.login_success",
-        actorId: session.staff.id,
-        entityType: "staff_user",
-        entityId: session.staff.id,
-      });
-      authEvents.inc({ event: "login_success" });
-      sendSession(res, session);
-    } catch (err) {
-      // Sin el correo: la auditoría de fallos solo guarda el HMAC de la IP y el user agent.
-      if (err instanceof AccountLockedError) {
-        authEvents.inc({ event: "login_locked" });
-        audit(req, { action: "auth.login_locked", actorId: null });
-      } else if (err instanceof ApiError && err.statusCode === 401) {
-        authEvents.inc({ event: "login_failure" });
-        audit(req, { action: "auth.login_failure", actorId: null });
+      const result = await authService.login(req.body, clientOf(req));
+      if (result.kind === "session") {
+        auditLoginSuccess(req, result.session.staff.id, false);
+        sendSession(res, result.session);
+      } else if (result.kind === "mfa_required") {
+        res.status(200).json({ mfaRequired: true, challengeToken: result.challengeToken });
+      } else {
+        res.status(200).json({ mfaEnrollmentRequired: true, enrollmentToken: result.enrollmentToken });
       }
+    } catch (err) {
+      auditFailure(req, err);
       throw err;
     }
   },
 
+  async verifyMfa(req: Request, res: Response) {
+    try {
+      const result = await authService.verifyMfa(req.body, clientOf(req));
+      auditLoginSuccess(req, result.session.staff.id, true);
+      if (result.usedBackupCode) {
+        audit(req, {
+          action: "auth.mfa_backup_code_used",
+          actorId: result.session.staff.id,
+          entityType: "staff_user",
+          entityId: result.session.staff.id,
+          metadata: { remaining: result.backupCodesRemaining ?? 0 },
+        });
+      }
+      sendSession(
+        res,
+        result.session,
+        result.usedBackupCode ? { backupCodesRemaining: result.backupCodesRemaining } : {}
+      );
+    } catch (err) {
+      auditFailure(req, err);
+      throw err;
+    }
+  },
+
+  async startEnrollment(req: Request, res: Response) {
+    res.json(await authService.startEnrollment(req.body.enrollmentToken));
+  },
+
+  async confirmEnrollment(req: Request, res: Response) {
+    const result = await authService.confirmEnrollment(req.body, clientOf(req));
+    const staffId = result.session.staff.id;
+    audit(req, { action: "mfa.enabled", actorId: staffId, entityType: "staff_user", entityId: staffId });
+    auditLoginSuccess(req, staffId, true);
+    // Los códigos de respaldo viajan UNA vez, en esta respuesta (en la base solo quedan sus hashes).
+    sendSession(res, result.session, { backupCodes: result.backupCodes });
+  },
+
   async refresh(req: Request, res: Response) {
     try {
-      sendSession(res, await sessionsService.rotate(readRefreshCookie(req)));
+      sendSession(res, await sessionsService.rotate(readRefreshCookie(req), clientOf(req)));
     } catch (err) {
       if (err instanceof RefreshReuseError) {
         authEvents.inc({ event: "refresh_reuse_detected" });
@@ -88,6 +148,26 @@ export const authController = {
   },
 
   async me(req: Request, res: Response) {
-    res.json(await staffService.getPublic(currentUser(req).staffId));
+    res.json(await profileService.get(currentUser(req).staffId));
+  },
+
+  /** Siempre 202 con el mismo cuerpo, al instante: no revela si el correo tiene cuenta. */
+  async forgotPassword(req: Request, res: Response) {
+    passwordService.requestReset(req.body.email);
+    res.status(202).json({ message: RESET_REQUESTED });
+  },
+
+  async resetPassword(req: Request, res: Response) {
+    const staffId = await passwordService.reset(req.body.token, req.body.password);
+    audit(req, { action: "auth.password_reset", actorId: staffId, entityType: "staff_user", entityId: staffId });
+    clearRefreshCookie(res);
+    res.status(200).json({ message: "Tu contraseña cambió. Inicia sesión con la nueva." });
+  },
+
+  /** Confirmación del correo nuevo: sin sesión (el enlace llega a la bandeja nueva, quizá en otro equipo). */
+  async confirmEmail(req: Request, res: Response) {
+    const staffId = await profileService.confirmEmailChange(req.body.token);
+    audit(req, { action: "profile.email_changed", actorId: staffId, entityType: "staff_user", entityId: staffId });
+    res.status(200).json({ message: "Tu correo quedó actualizado. Úsalo para iniciar sesión." });
   },
 };

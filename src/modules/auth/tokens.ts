@@ -5,6 +5,8 @@ import { env } from "../../config/env";
 export interface AccessTokenPayload {
   staffId: string;
   role: StaffRole;
+  /** Sesión (familia de refresh tokens) que emitió este token: marca "esta sesión" y "cerrar las demás". */
+  sessionId?: string;
   /** Expiración (segundos desde epoch), para cerrar a tiempo conexiones largas (WebSocket). */
   exp?: number;
 }
@@ -14,8 +16,8 @@ const ISSUER = "atencion-ia";
 const AUDIENCE = "atencion-ia-staff";
 
 /** Access token del staff: JWT HS256 de vida corta. `sub` = id del staff. */
-export function issueAccessToken(staff: { id: string; role: StaffRole }): string {
-  return jwt.sign({ role: staff.role }, env.jwtSecret, {
+export function issueAccessToken(staff: { id: string; role: StaffRole }, sessionId?: string): string {
+  return jwt.sign({ role: staff.role, ...(sessionId ? { sid: sessionId } : {}) }, env.jwtSecret, {
     algorithm: "HS256",
     subject: staff.id,
     issuer: ISSUER,
@@ -38,7 +40,12 @@ export function verifyAccessToken(token: string): AccessTokenPayload | null {
     if (typeof payload !== "object" || typeof payload.sub !== "string" || !ROLES.includes(payload.role)) {
       return null;
     }
-    return { staffId: payload.sub, role: payload.role as StaffRole, exp: payload.exp };
+    return {
+      staffId: payload.sub,
+      role: payload.role as StaffRole,
+      sessionId: typeof payload.sid === "string" ? payload.sid : undefined,
+      exp: payload.exp,
+    };
   } catch {
     return null;
   }

@@ -6,6 +6,8 @@ import { verifyAccessToken } from "../modules/auth/tokens";
 export interface AuthUser {
   staffId: string;
   role: StaffRole;
+  /** Sesión (familia de refresh tokens) del token; no está en tokens emitidos antes de la Fase 7. */
+  sessionId?: string;
 }
 
 // Agrega req.user al tipo Request de Express (module augmentation).
@@ -31,6 +33,6 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
   const payload = verifyAccessToken(header.slice("Bearer ".length));
   if (!payload) throw new ApiError(401, "Token inválido o expirado");
 
-  req.user = { staffId: payload.staffId, role: payload.role };
+  req.user = { staffId: payload.staffId, role: payload.role, sessionId: payload.sessionId };
   next();
 }

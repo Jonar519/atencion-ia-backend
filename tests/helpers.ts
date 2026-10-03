@@ -1,9 +1,14 @@
+import { randomBytes } from "crypto";
 import request from "supertest";
 import bcrypt from "bcrypt";
 import type { ConversationStatus, StaffRole } from "@prisma/client";
 import { createApp } from "../src/app";
 import { prisma } from "../src/config/prisma";
 import { CSRF_HEADER, CSRF_HEADER_VALUE } from "../src/middlewares/csrf.middleware";
+import { encryptSecret } from "../src/modules/auth/mfaCrypto";
+import { generateSecret } from "../src/modules/auth/totp";
+import { normalizeBackupCode } from "../src/modules/auth/mfa.service";
+import { sha256 } from "../src/utils/hash";
 
 export const app = createApp();
 
@@ -32,11 +37,18 @@ export function authHeader(token: string) {
 
 export const csrfHeader = { [CSRF_HEADER]: CSRF_HEADER_VALUE };
 
+/**
+ * Un admin se crea CON la verificación en dos pasos activa (en la vida real es
+ * obligatoria); `mfa: false` lo deja sin ella (para probar el enrolamiento forzado).
+ * El secreto queda en `totpSecret` para calcular códigos en los tests.
+ */
 export async function createStaff(
   role: StaffRole = "agent",
-  overrides: { isActive?: boolean; maxConcurrent?: number } = {}
+  overrides: { isActive?: boolean; maxConcurrent?: number; mfa?: boolean } = {}
 ) {
-  return prisma.staffUser.create({
+  const withMfa = overrides.mfa ?? role === "admin";
+  const totpSecret = withMfa ? generateSecret() : null;
+  const staff = await prisma.staffUser.create({
     data: {
       name: `${role === "admin" ? "Admin" : "Agente"} ${unique()}`,
       email: `${role}-${unique()}@test.example`,
@@ -44,14 +56,38 @@ export async function createStaff(
       role,
       isActive: overrides.isActive ?? true,
       maxConcurrent: overrides.maxConcurrent ?? 3,
+      ...(totpSecret ? { mfaSecretEncrypted: encryptSecret(totpSecret), mfaEnabledAt: new Date() } : {}),
     },
   });
+  return Object.assign(staff, { totpSecret });
 }
 
-/** Inicia sesión por la API y devuelve el access token y la cookie de refresh. */
+/** Agrega un código de respaldo conocido a la cuenta (para completar el MFA en los tests). */
+export async function addBackupCode(staffId: string, code = randomBytes(4).toString("hex")) {
+  await prisma.mfaBackupCode.create({ data: { staffUserId: staffId, codeHash: sha256(normalizeBackupCode(code)) } });
+  return code;
+}
+
+/**
+ * Inicia sesión por la API y devuelve el access token y la cookie de refresh.
+ * Si la cuenta tiene MFA, completa el segundo paso con un código de respaldo
+ * recién agregado (los códigos TOTP no se pueden reutilizar dentro de 30 s y
+ * los tests inician muchas sesiones seguidas).
+ */
 export async function login(email: string, password = TEST_PASSWORD) {
-  const res = await request(app).post("/api/auth/login").set("X-Forwarded-For", freshIp()).send({ email, password });
-  if (res.status !== 200) throw new Error(`login falló (${res.status}): ${JSON.stringify(res.body)}`);
+  const ip = freshIp();
+  let res = await request(app).post("/api/auth/login").set("X-Forwarded-For", ip).send({ email, password });
+  if (res.status === 200 && res.body.mfaRequired) {
+    const staff = await prisma.staffUser.findUniqueOrThrow({ where: { email: email.trim().toLowerCase() } });
+    const code = await addBackupCode(staff.id);
+    res = await request(app)
+      .post("/api/auth/mfa/verify")
+      .set("X-Forwarded-For", ip)
+      .send({ challengeToken: res.body.challengeToken, code });
+  }
+  if (res.status !== 200 || !res.body.accessToken) {
+    throw new Error(`login falló (${res.status}): ${JSON.stringify(res.body)}`);
+  }
   const cookie = [res.headers["set-cookie"]].flat().find((c) => c?.startsWith("atencion_ia_refresh="));
   return { token: res.body.accessToken as string, cookie: cookie!.split(";")[0]!, res };
 }

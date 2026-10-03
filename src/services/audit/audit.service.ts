@@ -21,6 +21,26 @@ export type AuditAction =
   | "auth.login_locked"
   | "auth.logout"
   | "auth.refresh_reuse_detected"
+  | "auth.mfa_failure"
+  | "auth.mfa_backup_code_used"
+  | "auth.password_reset"
+  | "mfa.enabled"
+  | "mfa.disabled"
+  | "mfa.backup_codes_regenerated"
+  | "profile.update"
+  | "profile.email_change_requested"
+  | "profile.email_changed"
+  | "profile.password_changed"
+  | "profile.avatar_updated"
+  | "profile.avatar_deleted"
+  | "profile.export"
+  | "session.revoke"
+  | "session.revoke_others"
+  | "staff.anonymize"
+  | "conversation.reassign"
+  | "canned.create"
+  | "canned.update"
+  | "canned.delete"
   | "staff.create"
   | "staff.update"
   | "staff.availability"
@@ -37,7 +57,7 @@ export type AuditAction =
   | "call.end"
   | "call.purge";
 
-export type AuditEntity = "staff_user" | "session" | "kb_article" | "conversation" | "call";
+export type AuditEntity = "staff_user" | "session" | "kb_article" | "conversation" | "call" | "canned_response";
 
 export interface AuditEntry {
   action: AuditAction;
