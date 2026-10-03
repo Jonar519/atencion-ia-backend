@@ -5,6 +5,8 @@ import {
   enrollmentConfirmSchema,
   enrollmentStartSchema,
   forgotPasswordSchema,
+  invitationAcceptSchema,
+  invitationInspectSchema,
   loginSchema,
   mfaVerifySchema,
   resetPasswordSchema,
@@ -51,6 +53,21 @@ authRouter.post(
   passwordResetLimiter,
   validate({ body: confirmEmailSchema }),
   asyncHandler(authController.confirmEmail)
+);
+
+// Invitación (bloque F2): ver a quién invitan y completar la cuenta. Públicas (el token es la
+// credencial), con el mismo límite por IP que la recuperación. El token va en el CUERPO, no en la URL.
+authRouter.post(
+  "/invitation",
+  passwordResetLimiter,
+  validate({ body: invitationInspectSchema }),
+  asyncHandler(authController.inspectInvitation)
+);
+authRouter.post(
+  "/invitation/accept",
+  passwordResetLimiter,
+  validate({ body: invitationAcceptSchema }),
+  asyncHandler(authController.acceptInvitation)
 );
 
 // Estas dos se autentican con la cookie: requieren protección CSRF.

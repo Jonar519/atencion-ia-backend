@@ -8,7 +8,7 @@ import { sessionsService } from "../auth/sessions.service";
 import { lockoutService } from "../auth/lockout.service";
 import { getStorage } from "../../services/storage";
 import { logger } from "../../config/logger";
-import type { CreateStaffInput, UpdateStaffInput } from "./staff.schema";
+import type { UpdateStaffInput } from "./staff.schema";
 
 // Lo que la API expone de un miembro del staff. NUNCA el passwordHash.
 const PUBLIC_FIELDS = {
@@ -22,46 +22,64 @@ const PUBLIC_FIELDS = {
   lastLoginAt: true,
   createdAt: true,
   deletedAt: true,
+  invitedAt: true,
+  activatedAt: true,
 } satisfies Prisma.StaffUserSelect;
+
+// Lista del equipo: + casos en curso y el estado de la invitación. passwordHash se lee SOLO para
+// saber si está pendiente (sin contraseña) y se descarta; el enlace nunca sale de la base.
+const LISTED_SELECT = {
+  ...PUBLIC_FIELDS,
+  passwordHash: true,
+  tokens: { where: { purpose: "invitation", usedAt: null }, select: { expiresAt: true }, take: 1 },
+  _count: { select: { assignedConversations: { where: { status: "agent_active" } } } },
+} satisfies Prisma.StaffUserSelect;
+
+type ListedRow = Prisma.StaffUserGetPayload<{ select: typeof LISTED_SELECT }>;
+
+function toListed({ passwordHash, tokens, _count, ...staff }: ListedRow) {
+  const pending = passwordHash === null && !staff.deletedAt;
+  const expiresAt = tokens[0]?.expiresAt ?? null;
+  return {
+    ...staff,
+    activeConversations: _count.assignedConversations,
+    // null = no es una invitación pendiente. "expired": hay que reenviarla.
+    invitation: pending ? { expiresAt, expired: !expiresAt || expiresAt.getTime() <= Date.now() } : null,
+  };
+}
+
+/** Una invitación pendiente no tiene contraseña: no se activa ni se anonimiza (se completa o se cancela). */
+async function assertNotPending(id: string) {
+  const row = await prisma.staffUser.findUnique({ where: { id }, select: { passwordHash: true, deletedAt: true } });
+  if (row && row.passwordHash === null && !row.deletedAt) {
+    throw new ApiError(
+      409,
+      "Esa cuenta es una invitación pendiente: se activa cuando la persona la completa. Puedes reenviarla o cancelarla."
+    );
+  }
+}
 
 export const staffService = {
   /** Lista del equipo (admin), con cuántos casos atiende cada uno ahora (para reasignar antes de eliminar). */
   async list() {
     const rows = await prisma.staffUser.findMany({
-      select: {
-        ...PUBLIC_FIELDS,
-        _count: { select: { assignedConversations: { where: { status: "agent_active" } } } },
-      },
+      select: LISTED_SELECT,
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
     });
-    return rows.map(({ _count, ...staff }) => ({ ...staff, activeConversations: _count.assignedConversations }));
+    return rows.map(toListed);
+  },
+
+  /** Un miembro con el mismo formato de la lista (respuesta de invitar y reenviar). */
+  async getListed(id: string) {
+    const row = await prisma.staffUser.findUnique({ where: { id }, select: LISTED_SELECT });
+    if (!row) throw new ApiError(404, "Miembro del staff no encontrado");
+    return toListed(row);
   },
 
   async getPublic(id: string) {
     const staff = await prisma.staffUser.findUnique({ where: { id }, select: PUBLIC_FIELDS });
     if (!staff) throw new ApiError(404, "Miembro del staff no encontrado");
     return staff;
-  },
-
-  async create(input: CreateStaffInput) {
-    const passwordHash = await bcrypt.hash(input.password, BCRYPT_COST);
-    try {
-      return await prisma.staffUser.create({
-        data: {
-          name: input.name,
-          email: input.email,
-          passwordHash,
-          role: input.role,
-          maxConcurrent: input.maxConcurrent,
-        },
-        select: PUBLIC_FIELDS,
-      });
-    } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-        throw new ApiError(409, "Ya existe un miembro del staff con ese correo");
-      }
-      throw err;
-    }
   },
 
   /**
@@ -74,6 +92,7 @@ export const staffService = {
       throw new ApiError(409, "No puedes desactivarte ni quitarte el rol de administrador a ti mismo");
     }
     const target = await this.getPublic(id);
+    if (input.isActive !== undefined) await assertNotPending(id);
     // Una cuenta anonimizada es definitiva: no se reactiva ni se edita (la base también lo impide).
     if (target.deletedAt) throw new ApiError(409, "La cuenta fue eliminada (anonimizada) y no se puede modificar");
     const updated = await prisma.staffUser.update({
@@ -106,6 +125,7 @@ export const staffService = {
    */
   async anonymize(actorId: string, id: string) {
     if (actorId === id) throw new ApiError(409, "No puedes eliminar tu propia cuenta");
+    await assertNotPending(id);
     const result = await prisma.$transaction(async (tx) => {
       const [staff] = await tx.$queryRaw<
         { role: string; email: string; deleted_at: Date | null; avatar_storage_key: string | null }[]

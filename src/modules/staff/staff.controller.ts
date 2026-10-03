@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { staffService } from "./staff.service";
+import { invitationsService } from "./invitations.service";
 import { profileService } from "../profile/profile.service";
 import { audit } from "../../services/audit/audit.service";
 import { currentUser, routeParam } from "../../utils/params";
@@ -9,15 +10,30 @@ export const staffController = {
     res.json({ items: await staffService.list() });
   },
 
-  async create(req: Request, res: Response) {
-    const staff = await staffService.create(req.body);
+  /** Invitar (bloque F2). La respuesta NO incluye el enlace: solo viaja por correo. */
+  async invite(req: Request, res: Response) {
+    const invited = await invitationsService.invite(currentUser(req).staffId, req.body);
     audit(req, {
-      action: "staff.create",
+      action: "staff.invite",
       entityType: "staff_user",
-      entityId: staff.id,
-      metadata: { role: staff.role },
+      entityId: invited.id,
+      metadata: { role: invited.role },
     });
-    res.status(201).json(staff);
+    res.status(201).json(await staffService.getListed(invited.id));
+  },
+
+  async resendInvitation(req: Request, res: Response) {
+    const id = routeParam(req, "id");
+    await invitationsService.resend(id);
+    audit(req, { action: "staff.invitation_resent", entityType: "staff_user", entityId: id });
+    res.json(await staffService.getListed(id));
+  },
+
+  async cancelInvitation(req: Request, res: Response) {
+    const id = routeParam(req, "id");
+    await invitationsService.cancel(id);
+    audit(req, { action: "staff.invitation_cancelled", entityType: "staff_user", entityId: id });
+    res.status(204).end();
   },
 
   async update(req: Request, res: Response) {

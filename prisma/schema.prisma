@@ -13,7 +13,8 @@ model StaffUser {
   id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                   String            @db.VarChar(150)
   email                  String            @unique(map: "uq_staff_users_email") @db.VarChar(254)
-  passwordHash           String            @map("password_hash") @db.VarChar(255)
+  /// NULL = invitación pendiente (migración 018): la cuenta aún no tiene contraseña y no puede entrar.
+  passwordHash           String?           @map("password_hash") @db.VarChar(255)
   role                   StaffRole         @default(agent)
   availability           AgentAvailability @default(offline)
   maxConcurrent          Int               @default(3) @map("max_concurrent") @db.SmallInt
@@ -22,13 +23,18 @@ model StaffUser {
   createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt              DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
   phone                  String?           @db.VarChar(30)
-  theme                  String            @default("system") @db.VarChar(10)
   avatarStorageKey       String?           @map("avatar_storage_key") @db.VarChar(300)
   /// Secreto TOTP CIFRADO (AES-256-GCM, src/modules/auth/mfaCrypto.ts). Nunca en claro.
   mfaSecretEncrypted     String?           @map("mfa_secret_encrypted")
   mfaEnabledAt           DateTime?         @map("mfa_enabled_at") @db.Timestamptz(6)
   mfaLastUsedStep        BigInt?           @map("mfa_last_used_step")
   deletedAt              DateTime?         @map("deleted_at") @db.Timestamptz(6)
+  /// Invitación (migración 018): cuándo y quién invitó; cuándo la persona completó su cuenta.
+  invitedAt              DateTime?         @map("invited_at") @db.Timestamptz(6)
+  invitedById            String?           @map("invited_by") @db.Uuid
+  activatedAt            DateTime?         @map("activated_at") @db.Timestamptz(6)
+  invitedBy              StaffUser?        @relation("staff_invited_by", fields: [invitedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  invitedStaff           StaffUser[]       @relation("staff_invited_by")
   callParticipations     CallParticipant[]
   handledCalls           Call[]
   assignedConversations  Conversation[]

@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import bcrypt from "bcrypt";
+import { passwordMatches } from "./passwordCheck";
 import QRCode from "qrcode";
 import { prisma } from "../../config/prisma";
 import { ApiError } from "../../utils/apiError";
@@ -146,7 +146,7 @@ export const mfaService = {
       throw new ApiError(409, "Para una cuenta de administrador la verificación en dos pasos es obligatoria");
     }
     if (!staff.mfaEnabledAt) throw new ApiError(409, "La verificación en dos pasos no está activa");
-    if (!(await bcrypt.compare(password, staff.passwordHash))) throw new ApiError(400, "La contraseña no es correcta");
+    if (!(await passwordMatches(password, staff.passwordHash))) throw new ApiError(400, "La contraseña no es correcta");
     if (!(await this.verifyCode(staffId, code))) throw new ApiError(400, "El código no es correcto");
     await prisma.$transaction([
       prisma.staffUser.update({

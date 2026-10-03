@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import { BCRYPT_COST, passwordMatches } from "./passwordCheck";
 import type { StaffUser } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { ApiError } from "../../utils/apiError";
@@ -7,18 +7,14 @@ import { mfaService } from "./mfa.service";
 import { ClientInfo, SessionResult, sessionsService } from "./sessions.service";
 import { consumeToken, findLiveToken, issueToken, registerFailedAttempt } from "./singleUseTokens";
 
-export const BCRYPT_COST = 10;
+// Re-exportado: otros módulos lo importan desde aquí.
+export { BCRYPT_COST, passwordMatches };
 
 // Mismo mensaje para "no existe", "contraseña incorrecta" y "cuenta
 // desactivada": no se revela qué correos tienen cuenta.
 export const INVALID_CREDENTIALS = "Credenciales inválidas";
 export const INVALID_MFA_CODE = "El código no es correcto";
 export const MFA_STEP_EXPIRED = "El paso de verificación venció o ya se usó. Inicia sesión de nuevo.";
-
-// Hash de una contraseña aleatoria: cuando el correo no existe se compara
-// igual contra este hash, para que la respuesta tarde lo mismo que con un
-// correo real (si no, el tiempo de respuesta revelaría qué cuentas existen).
-const DUMMY_HASH = bcrypt.hashSync(`dummy-${Math.random()}`, BCRYPT_COST);
 
 /** Los correos se guardan y se buscan siempre en minúsculas (la base lo exige con un CHECK). */
 export function normalizeEmail(email: string): string {
@@ -75,7 +71,8 @@ export const authService = {
     if (remaining > 0) throw new AccountLockedError(remaining);
 
     const staff = await prisma.staffUser.findUnique({ where: { email } });
-    const valid = await bcrypt.compare(input.password, staff?.passwordHash ?? DUMMY_HASH);
+    // Invitación pendiente (sin contraseña) = "Credenciales inválidas", como un correo que no existe.
+    const valid = await passwordMatches(input.password, staff?.passwordHash);
     if (!staff || !valid) {
       await lockoutService.registerFailure(email);
       throw new ApiError(401, INVALID_CREDENTIALS);
@@ -119,6 +116,19 @@ export const authService = {
       usedBackupCode: !isTotp,
       backupCodesRemaining: isTotp ? undefined : await mfaService.remainingBackupCodes(staff.id),
     };
+  },
+
+  /**
+   * Tras completar una invitación (bloque F2), con las MISMAS reglas que el
+   * login: un admin debe activar ahora la verificación en dos pasos (no hay
+   * sesión sin ella); un asesor entra directo y puede activarla en su perfil.
+   */
+  async afterInvitationAccepted(staffId: string, client: ClientInfo = {}): Promise<LoginResult> {
+    const staff = await prisma.staffUser.findUniqueOrThrow({ where: { id: staffId } });
+    if (staff.role === "admin") {
+      return { kind: "mfa_enrollment_required", enrollmentToken: await issueToken(staff.id, "mfa_enrollment") };
+    }
+    return { kind: "session", session: await completeLogin(staff, client) };
   },
 
   /** Enrolamiento obligatorio (admin) durante el login: genera el QR. Puede repetirse (nuevo secreto). */

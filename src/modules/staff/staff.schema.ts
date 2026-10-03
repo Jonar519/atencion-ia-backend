@@ -1,26 +1,20 @@
 import { z } from "zod";
 import { cleanText } from "../../utils/schemas";
-import { PASSWORD_MAX_LENGTH, passwordProblems } from "../auth/passwordPolicy";
 
 const roleSchema = z.enum(["admin", "agent"]);
 const availabilitySchema = z.enum(["offline", "available", "busy", "away"]);
 
-// .strict(): un campo no declarado (p. ej. "passwordHash" o "isActive" donde
-// no corresponde) es un 400, no se ignora en silencio.
-export const createStaffSchema = z
+// .strict(): un campo no declarado es un 400, no se ignora en silencio. En
+// particular "password": el admin NUNCA elige la contraseña de otra persona
+// (bloque F2: la cuenta solo se obtiene completando una invitación).
+export const inviteStaffSchema = z
   .object({
     name: cleanText(2, 150),
     email: z.string().trim().toLowerCase().email().max(254),
-    password: z.string().max(PASSWORD_MAX_LENGTH * 4),
     role: roleSchema.default("agent"),
     maxConcurrent: z.number().int().min(1).max(20).default(3),
   })
-  .strict()
-  .superRefine((data, ctx) => {
-    for (const message of passwordProblems(data.password, { email: data.email, name: data.name })) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["password"], message });
-    }
-  });
+  .strict();
 
 export const updateStaffSchema = z
   .object({
@@ -34,5 +28,5 @@ export const updateStaffSchema = z
 
 export const availabilitySchemaBody = z.object({ availability: availabilitySchema }).strict();
 
-export type CreateStaffInput = z.infer<typeof createStaffSchema>;
+export type InviteStaffInput = z.infer<typeof inviteStaffSchema>;
 export type UpdateStaffInput = z.infer<typeof updateStaffSchema>;

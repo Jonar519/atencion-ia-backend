@@ -1,8 +1,8 @@
 import { z } from "zod";
 import "../../utils/schemas";
 
-// No hay registro público: las cuentas del staff las crea un admin
-// (POST /api/staff). Aquí solo se inicia sesión.
+// No hay registro público: la ÚNICA forma de tener cuenta es una invitación de
+// un admin (POST /api/staff/invitations, bloque F2). Aquí se inicia sesión.
 export const loginSchema = z
   .object({
     email: z.string().trim().email().max(254),
@@ -36,5 +36,14 @@ export const forgotPasswordSchema = z.object({ email: z.string().trim().email().
 // La política se aplica en el servicio (necesita el correo y el nombre de la cuenta).
 export const resetPasswordSchema = z.object({ token: oneTimeToken, password: z.string().min(1).max(300) }).strict();
 export const confirmEmailSchema = z.object({ token: oneTimeToken }).strict();
+
+// Invitación (bloque F2). El token se valida laxo A PROPÓSITO: un enlace mal copiado recibe
+// el mismo "invitación no válida" que uno vencido o usado (el servicio responde igual a todos).
+const invitationToken = z.string().trim().min(1).max(100);
+export const invitationInspectSchema = z.object({ token: invitationToken }).strict();
+// La política se aplica en el servicio (necesita el correo y el nombre de la cuenta invitada).
+export const invitationAcceptSchema = z
+  .object({ token: invitationToken, password: z.string().min(1).max(300) })
+  .strict();
 
 export { totpCode };

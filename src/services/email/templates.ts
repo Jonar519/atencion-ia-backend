@@ -60,4 +60,23 @@ export const templates = {
       text: `La verificación en dos pasos de tu cuenta quedó ${enabled ? "ACTIVADA" : "DESACTIVADA"}.${FOOTER}`,
     };
   },
+  /** Invitación al panel (bloque F2): la ÚNICA forma de obtener una cuenta. Enlace de un solo uso, 72 h. */
+  invitation(to: string, staffId: string, token: string, who: { name: string; role: "admin" | "agent" }): EmailMessage {
+    const role = who.role === "admin" ? "administrador(a)" : "asesor(a)";
+    const mfa =
+      who.role === "admin"
+        ? "\nComo administrador(a), al completar tu cuenta activarás la verificación en dos pasos (necesitas una app de autenticación en tu teléfono)."
+        : "";
+    return {
+      to,
+      relatedStaffId: staffId,
+      template: "invitation",
+      subject: "Te invitaron al panel de atención de Banco Cordillera",
+      text:
+        `Hola, ${who.name}. Te invitaron a unirte al panel de atención de Banco Cordillera como ${role}.\n\n` +
+        `Completa tu cuenta y elige tu contraseña con este enlace (vence en 72 horas y sirve una sola vez):\n` +
+        `${link("invitacion", token)}${mfa}` +
+        "\n\nSi no esperabas esta invitación, ignora este mensaje: sin completarla no se crea ningún acceso.\n— Banco Cordillera, atención al cliente",
+    };
+  },
 };

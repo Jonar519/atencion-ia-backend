@@ -132,13 +132,13 @@ describe("autorización por rol", () => {
     expect((await request(app).delete(`/api/kb/articles/${article.id}`).set(authHeader(token))).status).toBe(403);
   });
 
-  it("un agente no puede listar ni crear staff", async () => {
+  it("un agente no puede listar staff ni invitar a nadie", async () => {
     const { token } = await staffSession("agent");
     expect((await request(app).get("/api/staff").set(authHeader(token))).status).toBe(403);
     const res = await request(app)
-      .post("/api/staff")
+      .post("/api/staff/invitations")
       .set(authHeader(token))
-      .send({ name: "Otro Admin", email: "otro@test.example", password: "Una-Clave-Larga-2026", role: "admin" });
+      .send({ name: "Otro Admin", email: "otro@test.example", role: "admin" });
     expect(res.status).toBe(403);
   });
 

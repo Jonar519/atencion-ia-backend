@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { staffController } from "./staff.controller";
 import { profileController } from "../profile/profile.controller";
-import { availabilitySchemaBody, createStaffSchema, updateStaffSchema } from "./staff.schema";
+import { availabilitySchemaBody, inviteStaffSchema, updateStaffSchema } from "./staff.schema";
 import { authMiddleware } from "../../middlewares/auth.middleware";
 import { requireRole } from "../../middlewares/role.middleware";
 import { validate } from "../../middlewares/validate.middleware";
@@ -24,12 +24,27 @@ staffRouter.get("/:id/avatar", validate({ params: uuidParams("id") }), asyncHand
 
 // Solo admin: gestión de cuentas.
 staffRouter.get("/", requireRole("admin"), asyncHandler(staffController.list));
+// Alta SOLO por invitación (bloque F2): no hay ruta para crear una cuenta con contraseña.
 staffRouter.post(
-  "/",
+  "/invitations",
   requireRole("admin"),
   adminWriteLimiter,
-  validate({ body: createStaffSchema }),
-  asyncHandler(staffController.create)
+  validate({ body: inviteStaffSchema }),
+  asyncHandler(staffController.invite)
+);
+staffRouter.post(
+  "/:id/invitation/resend",
+  requireRole("admin"),
+  adminWriteLimiter,
+  validate({ params: uuidParams("id") }),
+  asyncHandler(staffController.resendInvitation)
+);
+staffRouter.delete(
+  "/:id/invitation",
+  requireRole("admin"),
+  adminWriteLimiter,
+  validate({ params: uuidParams("id") }),
+  asyncHandler(staffController.cancelInvitation)
 );
 staffRouter.patch(
   "/:id",

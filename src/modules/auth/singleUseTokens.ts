@@ -16,13 +16,15 @@ import { dbNow } from "../../utils/dbTime";
  *
  * (No se usa un JWT firmado: no se podría invalidar tras usarlo.)
  */
-export type TokenPurpose = "password_reset" | "email_change" | "mfa_challenge" | "mfa_enrollment";
+export type TokenPurpose = "password_reset" | "email_change" | "mfa_challenge" | "mfa_enrollment" | "invitation";
 
 export const TOKEN_TTL_MS: Record<TokenPurpose, number> = {
   password_reset: 15 * 60_000,
   email_change: 15 * 60_000,
   mfa_challenge: 5 * 60_000,
   mfa_enrollment: 10 * 60_000,
+  // Invitación al panel (bloque F2): la persona puede no verla enseguida. La base topa en 72 h.
+  invitation: 72 * 60 * 60_000,
 };
 
 /** Intentos fallidos permitidos contra un desafío de MFA antes de invalidarlo. */

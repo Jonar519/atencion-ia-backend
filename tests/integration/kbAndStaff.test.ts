@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
-import { app, authHeader, csrfHeader, freshIp, login, staffSession, unique } from "../helpers";
+import { app, authHeader, csrfHeader, freshIp, staffSession, unique } from "../helpers";
 import { prisma } from "../../src/config/prisma";
 
 const article = () => ({
@@ -91,27 +91,25 @@ describe("base de conocimiento (admin)", () => {
 });
 
 describe("gestión del staff (admin)", () => {
-  it("aplica la política de contraseñas al crear una cuenta", async () => {
-    const { token } = await staffSession("admin");
-    const res = await request(app)
-      .post("/api/staff")
-      .set(authHeader(token))
-      .send({ name: "Nuevo Agente", email: `nuevo-${unique()}@test.example`, password: "Password123!" });
-    expect(res.status).toBe(400);
-    expect(res.body.details).toEqual(expect.arrayContaining([expect.objectContaining({ field: "body.password" })]));
-  });
-
-  it("crea una cuenta que puede iniciar sesión, sin devolver el hash", async () => {
+  // El alta de cuentas es SOLO por invitación (bloque F2): ver tests/integration/invitations.test.ts.
+  it("la cuenta invitada aplica la política de contraseñas al completarse (el admin no elige contraseñas)", async () => {
     const { token } = await staffSession("admin");
     const email = `nuevo-${unique()}@test.example`;
-    const password = "tres palabras largas y raras";
     const res = await request(app)
-      .post("/api/staff")
+      .post("/api/staff/invitations")
       .set(authHeader(token))
-      .send({ name: "Nuevo Agente", email, password });
+      .send({ name: "Nuevo Agente", email });
     expect(res.status).toBe(201);
     expect(res.body).not.toHaveProperty("passwordHash");
-    expect((await login(email, password)).token).toEqual(expect.any(String));
+    const mail = await prisma.emailOutbox.findFirstOrThrow({ where: { toAddress: email, template: "invitation" } });
+    const link = decodeURIComponent(mail.bodyText.match(/[?&]token=([^\s&]+)/)![1]!);
+    const weak = await request(app)
+      .post("/api/auth/invitation/accept")
+      .set("X-Forwarded-For", freshIp())
+      .send({ token: link, password: "Password123!" });
+    expect(weak.status).toBe(400);
+    expect(weak.body.error).toBe("La contraseña no cumple la política");
+    expect(weak.body.details?.length).toBeGreaterThan(0);
   });
 
   it("desactivar a un agente cierra sus sesiones (el refresh deja de funcionar)", async () => {

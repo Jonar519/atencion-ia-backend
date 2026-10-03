@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
-import { AccountLockedError, InvalidMfaCodeError, authService } from "./auth.service";
+import { AccountLockedError, InvalidMfaCodeError, authService, type LoginResult } from "./auth.service";
+import { invitationsService } from "../staff/invitations.service";
 import {
   ClientInfo,
   REFRESH_COOKIE,
@@ -71,22 +72,43 @@ function auditFailure(req: Request, err: unknown) {
   }
 }
 
+/** Misma respuesta para el login y para completar una invitación: sesión, código de MFA o activar MFA. */
+function sendLoginResult(req: Request, res: Response, result: LoginResult) {
+  if (result.kind === "session") {
+    auditLoginSuccess(req, result.session.staff.id, false);
+    sendSession(res, result.session);
+  } else if (result.kind === "mfa_required") {
+    res.status(200).json({ mfaRequired: true, challengeToken: result.challengeToken });
+  } else {
+    res.status(200).json({ mfaEnrollmentRequired: true, enrollmentToken: result.enrollmentToken });
+  }
+}
+
 export const authController = {
   async login(req: Request, res: Response) {
     try {
-      const result = await authService.login(req.body, clientOf(req));
-      if (result.kind === "session") {
-        auditLoginSuccess(req, result.session.staff.id, false);
-        sendSession(res, result.session);
-      } else if (result.kind === "mfa_required") {
-        res.status(200).json({ mfaRequired: true, challengeToken: result.challengeToken });
-      } else {
-        res.status(200).json({ mfaEnrollmentRequired: true, enrollmentToken: result.enrollmentToken });
-      }
+      sendLoginResult(req, res, await authService.login(req.body, clientOf(req)));
     } catch (err) {
       auditFailure(req, err);
       throw err;
     }
+  },
+
+  /** Invitación (bloque F2): a quién invitaron. Cualquier enlace que no sirva → el mismo 400. */
+  async inspectInvitation(req: Request, res: Response) {
+    res.json(await invitationsService.inspect(req.body.token));
+  },
+
+  /** Completar la cuenta con la contraseña propia; luego, lo mismo que un login. */
+  async acceptInvitation(req: Request, res: Response) {
+    const staffId = await invitationsService.accept(req.body.token, req.body.password);
+    audit(req, {
+      action: "staff.invitation_accepted",
+      actorId: staffId,
+      entityType: "staff_user",
+      entityId: staffId,
+    });
+    sendLoginResult(req, res, await authService.afterInvitationAccepted(staffId, clientOf(req)));
   },
 
   async verifyMfa(req: Request, res: Response) {
