@@ -59,6 +59,15 @@ nunca se queda la plataforma sin administradores por un clic) y nadie puede elim
 (seudónimo: sin el resto de sus datos ya no identifica a nadie fuera del banco) y las métricas
 agregadas.
 
+## Invitaciones (alta de asesores)
+
+- La única forma de tener cuenta es una invitación de un admin. Mientras está pendiente, la cuenta
+  guarda solo nombre, correo, rol, quién invitó y cuándo; no tiene contraseña, MFA ni sesiones.
+- El correo de invitación queda en `email_outbox` con el proveedor simulado (se borra con la cuenta
+  si se anonimiza).
+- **Cancelar** una invitación pendiente borra la cuenta: nunca se usó y nada la referencia.
+- No se guarda ninguna preferencia de tema (migración 019): la app sigue el tema del sistema.
+
 ## Recuperación y verificación en dos pasos (resumen de reglas)
 
 - Recuperar contraseña: misma respuesta, al instante, exista o no el correo; enlace de 15 min, de un

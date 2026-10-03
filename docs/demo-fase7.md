@@ -3,24 +3,26 @@
 Todo funciona con proveedores simulados (IA, voz, correo, ubicación y archivos): no hace falta
 ninguna credencial. Comandos para **cmd.exe**.
 
-| Bloque | Tema                                                                 | Secciones |
-| ------ | -------------------------------------------------------------------- | --------- |
-| A      | Identidad: recuperación, verificación en dos pasos, sesiones, perfil | 0–5       |
-| B      | Roles y administración: guardas, analítica, equipo, respuestas, KB   | 6–10      |
-| C      | Adjuntos en el chat (imagen y PDF) sin que la IA vea el archivo      | 11        |
-| D1     | La llamada "en vivo": forma de onda, color y ánimo del cliente       | 12        |
-| D2     | Estados de carga, error, vacío y conectividad; foco del título       | 13        |
-| —      | Qué protege cada bloque, verificación final y lo no medido           | 14–16     |
+| Bloque | Tema                                                                       | Secciones |
+| ------ | -------------------------------------------------------------------------- | --------- |
+| A      | Identidad: recuperación, verificación en dos pasos, sesiones, perfil       | 0–5       |
+| B      | Roles y administración: guardas, analítica, equipo, respuestas, KB         | 6–10      |
+| C      | Adjuntos en el chat (imagen y PDF) sin que la IA vea el archivo            | 11        |
+| D1     | La llamada "en vivo": forma de onda, color y ánimo del cliente             | 12        |
+| D2     | Estados de carga, error, vacío y conectividad; foco del título             | 13        |
+| F      | Alta solo por invitación, menú de usuario, portada nueva, tema del sistema | 4, 14–16  |
+| —      | Qué protege cada bloque, verificación final y lo no medido                 | 17–19     |
 
 **Recorrido corto (unos 15 minutos), si no hay tiempo para todo:** 2 (entrar como admin con el
 código) → 6 (un asesor no ve la administración) → 7 (analítica) → 11 (adjuntar un PDF y probar que
 la IA no lo lee) → 12 (llamar y escalar: el borde cambia de color) → 13, pasos 3 y 4 (Reintentar sin
-recargar y sin internet).
+recargar y sin internet) → 14 (invitar a un asesor y completar su cuenta) → 4 (cambiar el tema de
+Windows con la app abierta).
 
 ## 0. Preparar tu base de desarrollo (una sola vez)
 
-Las migraciones 015 (identidad), 016 (respuestas predefinidas) y 017 (adjuntos) agregan sus tablas; `migrate.bat`
-aplica solo las que faltan. Tus procesos `npm run dev` y `npm run worker`
+Las migraciones 015 (identidad), 016 (respuestas predefinidas), 017 (adjuntos), 018 (invitaciones) y
+019 (quita la preferencia de tema) cambian el esquema; `migrate.bat` aplica solo las que faltan. Tus procesos `npm run dev` y `npm run worker`
 pueden seguir abiertos.
 
 ```bat
@@ -102,9 +104,13 @@ En la base no hay IP completas:
 docker exec -it atencion_ia_postgres psql -U postgres -d atencion_ia -c "SELECT ip_address, location_label, revoke_reason FROM refresh_tokens ORDER BY created_at DESC LIMIT 5"
 ```
 
-## 4. Perfil, tema, foto y datos
+## 4. Perfil, foto, datos y tema
 
-- **Apariencia → Oscuro**: el panel cambia al instante y se recuerda (es parte del perfil).
+- **Tema:** no se elige en la app. TODA la aplicación sigue el tema de tu sistema operativo. En
+  Windows: Configuración → Personalización → Colores → "Elige tu modo" → Oscuro (o Claro): la app
+  abierta cambia al instante, sin recargar, en cualquier pantalla (también la portada y el widget).
+  Sin tocar Windows: F12 → menú ⋮ → More tools → Rendering → "Emulate CSS media feature
+  prefers-color-scheme".
 - **Foto → Elegir una foto**: arrástrala o usa las flechas, **Acercar**, **Guardar foto**. Solo se
   sube el recorte de 256 px.
 - **Correo**: pide la contraseña; el enlace llega al correo NUEVO (y un aviso al anterior).
@@ -150,8 +156,8 @@ pide "quiero hablar con un asesor" (escala), y cierra el caso desde el panel.
    explica qué se borra → clic de nuevo. La fila queda como "Cuenta eliminada (anonimizada)".
 4. **Exportar datos** (antes de eliminar) descarga su JSON.
 
-No uses tu cuenta de Laura del seed si la quieres conservar: crea antes un asesor de prueba
-(`POST /api/staff`) o haz este paso al final.
+No uses tu cuenta de Laura del seed si la quieres conservar: invita antes a un asesor de prueba
+(sección 14) o haz este paso al final.
 
 ## 9. Respuestas predefinidas
 
@@ -250,45 +256,98 @@ Con `npm run dev` (API 4100 y frontend 5174) abiertos. Las herramientas de desar
 6. **Foco del título.** Navega entre pantallas con el teclado: el título ya no muestra un recuadro
    al cambiar de pantalla, pero Tab sigue marcando cada botón y campo.
 
+# Bloque F — pulido final
+
+## 14. Dar de alta a un asesor: SOLO por invitación
+
+No hay registro público ni contraseñas elegidas por un admin: el único camino es la invitación.
+
+1. Como admin (sección 2): **Equipo → Invitar asesor** → nombre, correo y rol → **Enviar invitación**.
+   Aparece en la lista como **Invitación pendiente · vence …** (72 horas) con **Reenviar** y
+   **Cancelar**. El enlace NO se muestra en pantalla: solo viaja por correo.
+2. Lee el correo simulado:
+
+   ```bat
+   docker exec -it atencion_ia_postgres psql -U postgres -d atencion_ia -At -c "SELECT body_text FROM email_outbox WHERE template = 'invitation' ORDER BY id DESC LIMIT 1"
+   ```
+
+3. Abre el enlace (`http://localhost:5174/#/agente/invitacion?token=…`) en una **ventana de
+   incógnito** (en la misma ventana, la sesión del admin se reemplazaría). **Completa tu cuenta**
+   saluda por nombre; elige una contraseña de 12+ caracteres. Un asesor queda con sesión ("Tu
+   cuenta está lista", con la recomendación de activar la verificación en dos pasos); un admin
+   pasa obligatoriamente a activarla con el QR.
+4. Abre el mismo enlace otra vez: **Invitación no válida** (sirve una sola vez). El mismo mensaje
+   aparece para un enlace vencido, cancelado o mal copiado: no revela nada del correo.
+5. En **Equipo**, la persona ya no figura como pendiente. **Reenviar** invalida el enlace anterior;
+   **Cancelar** (con confirmación) borra la cuenta pendiente.
+6. El login no tiene "crear cuenta"; una cuenta pendiente no puede entrar ni pedir recuperación.
+
+## 15. Menú de usuario y recuperación visible
+
+- En el panel, la administración y **Mi perfil**, tu foto y tu nombre (arriba a la derecha) son un
+  botón: muestra tu rol y correo, **Mi perfil** y **Salir**. Con teclado: Tab hasta el botón, Enter
+  (el foco pasa a "Mi perfil"), Escape cierra y devuelve el foco.
+- En el login, **¿Olvidaste tu contraseña?** está justo debajo de **Entrar**. El correo trae un
+  enlace (no un código).
+- Los avisos flotantes ("Invitación enviada…") ya no bloquean el clic del botón que tapan.
+
+## 16. Portada
+
+`http://localhost:5174`: el fragmento de conversación muestra con la regla de color quién habla
+(navy = cliente, gris = asistente virtual, ámbar = una persona del banco). **Soy cliente** es la
+acción principal; la entrada del staff es la línea discreta de abajo. Con Tab hasta "Soy cliente",
+la regla se ensancha y "Escribir al banco →" se subraya (sin animación). Cambia el tema de Windows
+(sección 4): la portada también lo sigue.
+
 # Cierre de la Fase 7
 
-## 14. Qué protege cada bloque (pruebas que rompen la regla a propósito)
+## 17. Qué protege cada bloque (pruebas que rompen la regla a propósito)
 
 `npm run test:mutations` cambia el código para romper cada regla y exige que algún test falle. Las
 de la Fase 7:
 
-| Bloque | Regla crítica                                                                     | Mutaciones                    |
-| ------ | --------------------------------------------------------------------------------- | ----------------------------- |
-| A      | MFA (sin replay, códigos de un solo uso, admin obligatoria, bloqueo)              | backend 40–48                 |
-| A      | Enlaces de un solo uso, recuperación sin revelar cuentas, cierre de sesiones      | backend 49–57                 |
-| A      | Foto (bytes mágicos), sesiones ajenas, IP truncada, anonimización                 | backend 58–65                 |
-| A      | Login con MFA, códigos de respaldo, enlaces, tema, contraste medido de los tokens | frontend 32–42                |
-| B      | Solo admin: respuestas, analítica, equipo; métricas y CSAT correctos              | backend 66–76; frontend 43–53 |
-| C      | **La IA nunca recibe el contenido ni el nombre de un adjunto**                    | backend 77–81                 |
-| C      | Archivos: bytes mágicos, PDF con contenido activo, EXIF, acceso por conversación  | backend 82–90; frontend 54–59 |
-| D1     | Forma de onda, una sola animación y una vez, insignia y ánimo en vivo             | frontend 60–71                |
-| D2     | Reintentar sin recargar, avisos de conexión, vacíos, foco del título, axe         | frontend 72–84                |
+| Bloque | Regla crítica                                                                                                             | Mutaciones                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| A      | MFA (sin replay, códigos de un solo uso, admin obligatoria, bloqueo)                                                      | backend 40–48                           |
+| A      | Enlaces de un solo uso, recuperación sin revelar cuentas, cierre de sesiones                                              | backend 49–57                           |
+| A      | Foto (bytes mágicos), sesiones ajenas, IP truncada, anonimización                                                         | backend 58–65                           |
+| A      | Login con MFA, códigos de respaldo, enlaces, contraste medido de los tokens                                               | frontend 32–41                          |
+| B      | Solo admin: respuestas, analítica, equipo; métricas y CSAT correctos                                                      | backend 66–76; frontend 42–52           |
+| C      | **La IA nunca recibe el contenido ni el nombre de un adjunto**                                                            | backend 77–81                           |
+| C      | Archivos: bytes mágicos, PDF con contenido activo, EXIF, acceso por conversación                                          | backend 82–90; frontend 53–58           |
+| D1     | Forma de onda, una sola animación y una vez, insignia y ánimo en vivo                                                     | frontend 59–70                          |
+| D2     | Reintentar sin recargar, avisos de conexión, vacíos, foco del título, axe                                                 | frontend 71–83                          |
+| F      | **Alta solo por invitación**: enlace de un solo uso, vencido, sin token, admin con MFA, solo admin invita                 | backend 91–99 (y 49–51); frontend 84–89 |
+| F      | Los avisos no bloquean clics; menú de usuario (teclado, foco, "Salir"); recuperación bajo "Entrar"                        | frontend 90–99                          |
+| F      | Portada: jerarquía, foco visible, fragmento ilustrativo, sin animación ni acento en vivo                                  | frontend 100–104                        |
+| F      | **Tema del sistema**: sin selector, oscuro solo por `prefers-color-scheme`, ninguna pantalla se sale, contraste en oscuro | frontend 105–109                        |
 
-## 15. Verificación final (bloque E)
+## 18. Verificación final (cierre del bloque F)
 
 Resultado de la última corrida completa, con tus procesos de desarrollo detenidos y las pruebas en
 bases aparte (`atencion_ia_test`, `atencion_ia_e2e`, Redis base 1):
 
-| Qué                                                            | Resultado                                                                                          |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Base de datos (base nueva y vacía, como la CI)                 | 17 migraciones; la segunda corrida no aplica nada; seed idempotente; **94/94** pruebas del esquema |
-| Backend: lint, typecheck, tests y build (`scripts\verify.bat`) | **413/413** tests en 34 archivos; también en orden aleatorio                                       |
-| Backend: mutaciones                                            | **90/90** detectadas                                                                               |
-| Frontend: lint, tests y build (`scripts\verify.bat`)           | **319/319** tests en 18 archivos; también en orden aleatorio                                       |
-| Frontend: mutaciones                                           | **84/84** detectadas                                                                               |
-| E2E aislado (`scripts\e2e.bat`)                                | **3/3**: texto, voz y adjuntos (axe y 0 violaciones de CSP)                                        |
-| Base de desarrollo                                             | Misma huella antes y después de toda la verificación                                               |
+| Qué                                                            | Resultado                                                                                                                       |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Base de datos (base nueva y desechable, como la CI)            | 19 migraciones; la segunda corrida no aplica nada; seed idempotente; **112/112** pruebas del esquema                            |
+| Backend: lint, typecheck, tests y build (`scripts\verify.bat`) | **429/429** tests en 35 archivos; también en orden aleatorio                                                                    |
+| Backend: mutaciones                                            | **99/99** detectadas                                                                                                            |
+| Frontend: lint, tests y build (`scripts\verify.bat`)           | **388/388** tests en 22 archivos; también en orden aleatorio                                                                    |
+| Frontend: mutaciones                                           | **109/109** detectadas                                                                                                          |
+| E2E aislado (`scripts\e2e.bat`)                                | **5/5**: texto, voz, adjuntos, invitación y el tema del sistema en las 13 pantallas × claro/oscuro (axe y 0 violaciones de CSP) |
+| Base de desarrollo                                             | Misma huella antes y después de toda la verificación                                                                            |
 
 Para repetirla (cmd.exe):
 
 ```bat
 cd atencion-ia-database
+docker exec atencion_ia_postgres createdb -U postgres atencion_ia_verif
+set DB_NAME=atencion_ia_verif
+scripts\migrate.bat
+scripts\seed.bat
 scripts\test.bat
+set DB_NAME=
+docker exec atencion_ia_postgres dropdb -U postgres atencion_ia_verif
 cd ..\atencion-ia-backend
 scripts\verify.bat
 npm run test:shuffle
@@ -299,10 +358,12 @@ npm run test:mutations
 scripts\e2e.bat
 ```
 
-(Detén antes `npm run dev` del backend y del frontend: las mutaciones cambian el código fuente un
-momento y tu servidor con recarga automática lo ejecutaría.)
+(Las pruebas del esquema van en una base desechable: `test.bat` usa por defecto la de desarrollo, y
+aunque cada prueba termina en ROLLBACK, avanzaría sus secuencias. Detén antes `npm run dev` del
+backend y del frontend: las mutaciones cambian el código fuente un momento y tu servidor con recarga
+automática lo ejecutaría.)
 
-## 16. No medido
+## 19. No medido
 
 - Lector de pantalla real (NVDA/JAWS) y Lighthouse. axe sí corre en el E2E y en las verificaciones
   en vivo.
@@ -313,3 +374,6 @@ momento y tu servidor con recarga automática lo ejecutaría.)
   El código acepta ±1 paso de 30 s de desfase de reloj; un desfase mayor no se midió con teléfonos
   reales.
 - La forma de onda y el barrido de color con micrófonos y equipos distintos al de las pruebas.
+- El tema del sistema se verificó con la emulación de `prefers-color-scheme` de Chrome (E2E en las
+  13 pantallas) y cambiando el modo de Windows; no en macOS, Android ni iOS.
+- La entrega real del correo de invitación (SMTP): se probó con el proveedor simulado.
