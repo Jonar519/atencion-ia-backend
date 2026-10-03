@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import type { HistoryTurn } from "../../services/ai";
 import type { TurnSignals } from "./escalationRules";
+import { textForAi } from "../attachments/fileChecks";
 
 /** Turnos de historial que se envían al modelo (suficiente para el contexto, acotado en costo). */
 export const HISTORY_TURNS = 12;
@@ -34,6 +35,8 @@ export async function loadHistory(conversationId: string, excludeMessageId?: str
       sentiment: true,
       analysisConfidence: true,
       _count: { select: { citations: true } },
+      // Del adjunto, SOLO el tipo: ni el nombre ni el archivo llegan al modelo (bloque C).
+      attachments: { select: { contentType: true } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: HISTORY_TURNS,
@@ -51,7 +54,9 @@ export async function loadHistory(conversationId: string, excludeMessageId?: str
   }
 
   return {
-    turns: rows.reverse().map((row) => ({ sender: row.senderType, content: row.content })),
+    turns: rows
+      .reverse()
+      .map((row) => ({ sender: row.senderType, content: textForAi(row.content, row.attachments[0]?.contentType) })),
     previousCustomerTurns,
     consecutiveUnsupportedAiReplies,
   };

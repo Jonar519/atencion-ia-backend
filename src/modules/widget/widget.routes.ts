@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { widgetController } from "./widget.controller";
 import {
   createConversationSchema,
@@ -8,7 +8,12 @@ import {
 } from "./widget.schema";
 import { widgetAuth } from "./widgetAuth.middleware";
 import { validate } from "../../middlewares/validate.middleware";
-import { customerAiLimiter, widgetSessionLimiter } from "../../middlewares/rateLimit.middleware";
+import {
+  attachmentUploadLimiter,
+  customerAiLimiter,
+  widgetSessionLimiter,
+} from "../../middlewares/rateLimit.middleware";
+import { MAX_ATTACHMENT_BYTES } from "../attachments/fileChecks";
 import { uuidParams } from "../../utils/schemas";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { widgetVoiceRouter } from "../voice/voice.routes";
@@ -50,6 +55,21 @@ widgetRouter.post(
   validate({ params: idParams, body: customerMessageSchema }),
   asyncHandler(widgetController.sendMessage)
 );
+
+// Adjuntos (bloque C): el cuerpo es el archivo CRUDO; el límite de express.raw corta antes
+// de leer más de la cuenta. Un adjunto también es un turno (IA): mismos límites que un mensaje.
+widgetRouter.post(
+  "/conversations/:id/attachments",
+  customerAiLimiter,
+  attachmentUploadLimiter,
+  validate({ params: idParams }),
+  express.raw({
+    type: ["image/png", "image/jpeg", "image/webp", "application/pdf"],
+    limit: MAX_ATTACHMENT_BYTES,
+  }),
+  asyncHandler(widgetController.sendAttachment)
+);
+widgetRouter.get("/attachments/:id", validate({ params: idParams }), asyncHandler(widgetController.attachment));
 
 // Voz (Fase 5): consentimiento, iniciar, consultar y colgar llamadas.
 widgetRouter.use(widgetVoiceRouter);

@@ -6,6 +6,8 @@ import { afterCursor, toPage, type Page } from "../../utils/pagination";
 import { handleCustomerTurn, PUBLIC_MESSAGE_FIELDS, type PublicMessage } from "../engine/conversationEngine";
 import { newWidgetToken, type WidgetIdentity } from "./widgetAuth.middleware";
 import type { CustomerMessageInput } from "./widget.schema";
+import { discardAttachment, storeAttachment } from "../attachments/attachments.service";
+import { ATTACHMENT_PLACEHOLDER } from "../attachments/fileChecks";
 
 /** Conversaciones abiertas simultáneas por cliente (evita abrir cientos para multiplicar el cupo). */
 export const MAX_OPEN_CONVERSATIONS = 3;
@@ -26,6 +28,7 @@ function toCustomerView(message: PublicMessage) {
     createdAt: message.createdAt,
     clientMsgId: message.clientMsgId,
     agentName: message.senderAgent ? (message.senderAgent.name.trim().split(/\s+/)[0] ?? null) : null,
+    attachment: message.attachments[0] ?? null,
   };
 }
 
@@ -115,6 +118,43 @@ export const widgetService = {
       channel: "text",
       clientMsgId: input.clientMsgId ?? null,
     });
+    return this.turnResponse(result);
+  },
+
+  /**
+   * Mensaje con ADJUNTO (imagen o PDF, bloque C). Se valida y guarda el
+   * archivo, y el turno pasa por el MISMO motor que un mensaje de texto. A la
+   * IA solo le llega la señal del adjunto + el comentario (textForAi).
+   * Si el turno no llega a guardarse (conversación cerrada, tope de IA,
+   * reenvío duplicado), el archivo se borra: no quedan huérfanos.
+   */
+  async sendAttachment(
+    identity: WidgetIdentity,
+    conversationId: string,
+    input: { data: unknown; fileName?: string; caption?: string; clientMsgId?: string }
+  ) {
+    const conversation = await ownConversation(identity, conversationId);
+    if (conversation.status === "closed") throw new ApiError(409, "La conversación está cerrada. Inicia una nueva.");
+    const stored = await storeAttachment({ conversationId, data: input.data, declaredName: input.fileName });
+    let result: Awaited<ReturnType<typeof handleCustomerTurn>>;
+    try {
+      result = await handleCustomerTurn({
+        conversationId,
+        customerId: identity.customerId,
+        content: input.caption ?? ATTACHMENT_PLACEHOLDER,
+        channel: "text",
+        clientMsgId: input.clientMsgId ?? null,
+        attachment: stored,
+      });
+    } catch (err) {
+      await discardAttachment(stored);
+      throw err;
+    }
+    if (result.duplicate) await discardAttachment(stored);
+    return this.turnResponse(result);
+  },
+
+  turnResponse(result: Awaited<ReturnType<typeof handleCustomerTurn>>) {
     return {
       message: toCustomerView(result.customerMessage),
       reply: result.reply ? toCustomerView(result.reply) : null,

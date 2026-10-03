@@ -11,6 +11,8 @@ import { escalate } from "./escalation.service";
 import { loadHistory } from "./history";
 import { publishConversationUpdated, publishMessages } from "../../realtime/publish";
 import type { RealtimeMessage } from "../../realtime/events";
+import { customerWrittenText, textForAi } from "../attachments/fileChecks";
+import type { StoredAttachment } from "../attachments/attachments.service";
 
 /**
  * MOTOR CONVERSACIONAL: procesa UN turno del cliente, venga de donde venga.
@@ -48,7 +50,21 @@ export interface CustomerTurnInput {
   /** Obligatorio si channel = "voice": la llamada de esta conversación. */
   callId?: string | null;
   clientMsgId?: string | null;
+  /**
+   * Adjunto YA validado y guardado (bloque C). El motor guarda sus datos con el
+   * mensaje, pero a la IA solo le llega la SEÑAL de que existe y su tipo
+   * (textForAi): nunca sus bytes ni su nombre, que controla el cliente.
+   */
+  attachment?: StoredAttachment | null;
 }
+
+/** Lo que se muestra de un adjunto (para descargarlo hace falta permiso sobre la conversación). */
+export const ATTACHMENT_PUBLIC_FIELDS = {
+  id: true,
+  contentType: true,
+  sizeBytes: true,
+  originalName: true,
+} satisfies Prisma.MessageAttachmentSelect;
 
 const PUBLIC_MESSAGE_FIELDS = {
   id: true,
@@ -58,6 +74,7 @@ const PUBLIC_MESSAGE_FIELDS = {
   createdAt: true,
   clientMsgId: true,
   senderAgent: { select: { name: true } },
+  attachments: { select: ATTACHMENT_PUBLIC_FIELDS },
 } satisfies Prisma.MessageSelect;
 
 export type PublicMessage = Prisma.MessageGetPayload<{ select: typeof PUBLIC_MESSAGE_FIELDS }>;
@@ -85,6 +102,7 @@ const ENGINE_MESSAGE_FIELDS = {
   content: true,
   createdAt: true,
   clientMsgId: true,
+  attachments: { select: ATTACHMENT_PUBLIC_FIELDS },
 } satisfies Prisma.MessageSelect;
 
 type EngineMessage = Prisma.MessageGetPayload<{ select: typeof ENGINE_MESSAGE_FIELDS }>;
@@ -107,6 +125,7 @@ function toRealtime(
     createdAt: message.createdAt.toISOString(),
     clientMsgId: message.clientMsgId,
     agent: null,
+    attachment: message.attachments[0] ?? null,
     intent: classification?.intent ?? null,
     sentiment: classification?.sentiment ?? null,
   };
@@ -148,18 +167,26 @@ export async function handleCustomerTurn(input: CustomerTurnInput): Promise<Turn
   const usage: UsageRecord[] = [];
 
   const withAi = conversation.status === "ai_active";
+  // Lo ÚNICO que la IA lee de este turno (bloque C): lo que el cliente escribió y, si
+  // adjuntó un archivo, la señal fija con su tipo. Nunca el archivo ni su nombre.
+  const customerText = customerWrittenText(input.content, Boolean(input.attachment));
+  const aiText = textForAi(input.content, input.attachment?.contentType);
 
-  // 3. Clasificación y (si la IA atiende) búsqueda en la KB, EN PARALELO.
+  // 3. Clasificación y (si la IA atiende) búsqueda en la KB, EN PARALELO, sobre lo que
+  // ESCRIBIÓ el cliente. Un adjunto sin comentario no se clasifica ni se busca.
   // Si la clasificación falla, el turno sigue sin análisis (no se pierde el mensaje).
   const [classified, retrieved] = await Promise.allSettled([
-    ai.classifier.classify(input.content),
-    withAi ? retrieveKnowledge(input.content) : Promise.resolve(null),
+    customerText ? ai.classifier.classify(customerText) : Promise.resolve(null),
+    withAi && customerText ? retrieveKnowledge(customerText) : Promise.resolve(null),
   ]);
   let classification: Classification | null = null;
   if (classified.status === "fulfilled") {
+    // null = adjunto sin comentario: no hay texto del cliente que clasificar.
     const result = classified.value;
-    classification = { intent: result.intent, sentiment: result.sentiment, confidence: result.confidence };
-    usage.push({ kind: "classification", model: result.model, usage: result.usage });
+    if (result) {
+      classification = { intent: result.intent, sentiment: result.sentiment, confidence: result.confidence };
+      usage.push({ kind: "classification", model: result.model, usage: result.usage });
+    }
   } else {
     const err: unknown = classified.reason;
     logger.warn({ err: err instanceof Error ? err.name : String(err) }, "Clasificación no disponible para el turno");
@@ -210,7 +237,7 @@ export async function handleCustomerTurn(input: CustomerTurnInput): Promise<Turn
       kbSupportFound = kbChunks.length > 0;
 
       const started = Date.now();
-      const reply = await ai.chat.reply({ history: history.turns, kbChunks, customerMessage: input.content });
+      const reply = await ai.chat.reply({ history: history.turns, kbChunks, customerMessage: aiText });
       replyLatencyMs = Date.now() - started;
       usage.push({ kind: "chat", model: reply.model, usage: reply.usage });
       replyText = reply.text;
@@ -310,6 +337,20 @@ async function saveCustomerMessage(input: CustomerTurnInput, classification: Cla
           callId: input.channel === "voice" ? input.callId : null,
           content: input.content,
           clientMsgId: input.clientMsgId ?? null,
+          ...(input.attachment
+            ? {
+                attachments: {
+                  create: {
+                    id: input.attachment.id,
+                    storageKey: input.attachment.storageKey,
+                    contentType: input.attachment.contentType,
+                    sizeBytes: input.attachment.sizeBytes,
+                    originalName: input.attachment.originalName,
+                    sha256: input.attachment.sha256,
+                  },
+                },
+              }
+            : {}),
           intent: classification?.intent ?? null,
           sentiment: classification?.sentiment ?? null,
           analysisConfidence: classification?.confidence ?? null,

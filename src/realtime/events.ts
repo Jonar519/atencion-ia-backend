@@ -36,6 +36,8 @@ export interface RealtimeMessage {
   createdAt: string;
   clientMsgId: string | null;
   agent: { id: string; name: string } | null;
+  /** Adjunto (bloque C): datos para mostrarlo; descargarlo exige permiso sobre la conversación. */
+  attachment: { id: string; contentType: string; sizeBytes: number; originalName: string } | null;
   /** Análisis de IA del turno del cliente: SOLO para el staff (audience.ts lo quita al cliente). */
   intent: MessageIntent | null;
   sentiment: MessageSentiment | null;

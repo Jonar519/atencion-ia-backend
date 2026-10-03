@@ -3,6 +3,8 @@ import { widgetService } from "./widget.service";
 import { currentWidget, WIDGET_COOKIE, widgetCookieOptions } from "./widgetAuth.middleware";
 import { routeParam } from "../../utils/params";
 import { CSRF_HEADER, CSRF_HEADER_VALUE } from "../../middlewares/csrf.middleware";
+import { readAttachmentMeta, sendAttachment } from "../attachments/attachments.http";
+import { attachmentForCustomer } from "../attachments/attachments.service";
 
 export const widgetController = {
   /**
@@ -52,5 +54,21 @@ export const widgetController = {
   async sendMessage(req: Request, res: Response) {
     const result = await widgetService.sendMessage(currentWidget(req), routeParam(req, "id"), req.body);
     res.status(result.duplicate ? 200 : 201).json(result);
+  },
+
+  async sendAttachment(req: Request, res: Response) {
+    const meta = readAttachmentMeta(req);
+    const result = await widgetService.sendAttachment(currentWidget(req), routeParam(req, "id"), {
+      data: req.body,
+      fileName: meta.fileName,
+      caption: meta.caption,
+      clientMsgId: meta.clientMsgId,
+    });
+    res.status(result.duplicate ? 200 : 201).json(result);
+  },
+
+  /** Ver/descargar un adjunto: solo de las conversaciones de ESTE cliente (cookie del widget). */
+  async attachment(req: Request, res: Response) {
+    sendAttachment(res, await attachmentForCustomer(currentWidget(req).customerId, routeParam(req, "id")));
   },
 };

@@ -34,6 +34,7 @@ export async function publishMessagesCreated(conversationId: string, messageIds:
         intent: true,
         sentiment: true,
         senderAgent: { select: { id: true, name: true } },
+        attachments: { select: { id: true, contentType: true, sizeBytes: true, originalName: true } },
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
@@ -47,6 +48,7 @@ export async function publishMessagesCreated(conversationId: string, messageIds:
         createdAt: row.createdAt.toISOString(),
         clientMsgId: row.clientMsgId,
         agent: row.senderAgent,
+        attachment: row.attachments[0] ?? null,
         intent: row.intent,
         sentiment: row.sentiment,
       };

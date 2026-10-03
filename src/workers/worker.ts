@@ -19,13 +19,15 @@ import {
 } from "../queues/queues";
 import { callsService } from "../modules/voice/calls.service";
 import { notifyEscalation } from "./notifyEscalation";
+import { purgeStorageDeletions } from "../modules/attachments/attachments.service";
 
 /**
  * Proceso worker (separado de la API): `npm run worker`.
  *  - kb-indexing: embeddings + índice del RAG de un artículo.
  *  - escalation-notify: aviso a los agentes de un escalamiento nuevo.
  *  - voice-maintenance (programado): cierra llamadas abandonadas y purga
- *    transcripciones vencidas (docs/privacy-voice.md).
+ *    transcripciones vencidas (docs/privacy-voice.md). En la misma pasada, borra del
+ *    almacenamiento los archivos de adjuntos eliminados (cola storage_deletions, docs/attachments.md).
  * Expone GET /health y GET /metrics (con METRICS_TOKEN) en WORKER_METRICS_PORT.
  * Apagado ordenado con SIGTERM/SIGINT: deja de tomar trabajos, termina los
  * que tiene en curso y cierra conexiones.
@@ -70,7 +72,10 @@ const voiceWorker = new Worker<VoiceMaintenanceJob>(
       purged += batch;
     }
     if (purged) logger.info({ purged }, "Transcripciones purgadas por retención");
-    return { purged };
+    let files = 0;
+    for (let batch = await purgeStorageDeletions(); batch > 0; batch = await purgeStorageDeletions()) files += batch;
+    if (files) logger.info({ files }, "Archivos de adjuntos eliminados del almacenamiento");
+    return { purged, files };
   },
   { connection: redisConnection, concurrency: 1 }
 );

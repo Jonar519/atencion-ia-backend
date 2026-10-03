@@ -34,6 +34,7 @@ const message: RealtimeMessage = {
   createdAt: "2026-09-29T10:00:00.000Z",
   clientMsgId: null,
   agent: null,
+  attachment: null,
   intent: "possible_fraud",
   sentiment: "angry",
 };
