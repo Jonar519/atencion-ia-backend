@@ -14,12 +14,16 @@ resolver (fraude, cliente molesto, pide un humano…) la conversación se escala
 | 4    | WebSocket de tiempo real (solo recepción), sesión del widget en cookie httpOnly, frontend                   | ✅     |
 | 5    | Voz: señalización WebRTC, STT/TTS (`VOICE_PROVIDER=mock`), mismo motor, retención                           | ✅     |
 | 6    | Pruebas de carga (con mejora medida), modelo de amenazas STRIDE, GitHub Actions                             | ✅     |
+| 7    | Identidad profesional (recuperar contraseña, MFA, sesiones, perfil), roles y administración, adjuntos       | ✅     |
 
 ## Stack
 
 Node.js 20+ · TypeScript · Express 4 · Prisma 6 (solo como cliente) · PostgreSQL 16 +
 pgvector · Redis 7 (rate limiting, colas BullMQ y pub/sub de tiempo real) · zod ·
 pino · prom-client · ws · Vitest + supertest. Voz: Deepgram (STT/TTS) detrás de una interfaz, `mock` por defecto.
+Fase 7, cada uno detrás de una interfaz con modo simulado por defecto: correo (nodemailer; `mock` guarda en
+`email_outbox`), ubicación aproximada (maxmind + archivo local de DB-IP; `mock`) y archivos (carpeta local o
+cualquier S3 con `@aws-sdk/client-s3`). `qrcode` para el QR de la verificación en dos pasos.
 
 ## Relación con los otros repositorios
 
@@ -80,6 +84,8 @@ Producción local (compilado): `npm run build` y luego `npm start`.
 | `npm run test:mutations`                                                | Rompe a propósito cada regla crítica y exige que los tests fallen             |
 | `npm run voice:demo`                                                    | Llamada de voz de demo por consola contra la API ([guía](docs/demo-fase5.md)) |
 | `npm run voice:purge`                                                   | Purga las transcripciones vencidas (lo mismo que el worker cada hora)         |
+| `npm run staff:reset-mfa -- correo`                                     | Quita la MFA de una cuenta (queda en la auditoría y cierra sus sesiones)      |
+| `npm run storage:purge`                                                 | Borra del almacenamiento los archivos en cola de borrado (adjuntos, fotos)    |
 | `npm run loadtest:setup` · `loadtest:messages` · `loadtest:escalations` | Pruebas de carga ([loadtests/README.md](loadtests/README.md))                 |
 
 ## Configuración (`.env`)
@@ -111,45 +117,66 @@ dice qué corregir. Ver `.env.example` (comentado).
 | `VOICE_MAX_CALL_SECONDS` / `VOICE_DAILY_SECONDS_PER_CUSTOMER`     | `900` / `1800`                        | Topes por llamada y por cliente en 24 h                                                                             |
 | `VOICE_RECONNECT_GRACE_MS` / `VOICE_CONNECT_TIMEOUT_MS`           | `15000` / `30000`                     |                                                                                                                     |
 | `ICE_SERVERS`                                                     | `[]`                                  | STUN/TURN (JSON) para WebRTC entre cliente y agente                                                                 |
+| `MFA_ENCRYPTION_KEY`                                              | vacía (= derivada de `JWT_SECRET`)    | Cifra el secreto de la MFA (AES-256-GCM, 32 bytes en base64); obligatoria en producción                             |
+| `APP_BASE_URL`                                                    | `http://localhost:5174`               | Base de los enlaces de los correos                                                                                  |
+| `EMAIL_PROVIDER` / `SMTP_URL` / `EMAIL_FROM`                      | `mock` / — / Banco Cordillera         | `mock` no envía: guarda en `email_outbox`; prohibido en producción                                                  |
+| `GEO_PROVIDER` / `GEO_DB_PATH`                                    | `mock` / —                            | `dbip`: archivo `.mmdb` local de DB-IP; la IP nunca sale del servidor                                               |
+| `STORAGE_PROVIDER` / `STORAGE_LOCAL_DIR`                          | `local` / `../atencion-ia-storage`    | `s3` exige `S3_BUCKET` y sus credenciales (`S3_ENDPOINT` para MinIO o R2)                                           |
 
 ## API
 
 Todas las rutas bajo `/api` exigen `Authorization: Bearer <accessToken>`, salvo
-`/api/auth/login`, `/refresh` y `/logout`. Errores: `{ error, details? }`; los de
+`/api/auth/login`, `/refresh`, `/logout` y los pasos sin sesión de la Fase 7 (`/mfa/*`,
+`/forgot-password`, `/reset-password`, `/confirm-email`). Errores: `{ error, details? }`; los de
 validación traen `details: [{ field, message }]` en español.
 
-| Método y ruta                                                  | Quién                                    | Qué hace                                                                                                                                         |
-| -------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /api/auth/login`                                         | público                                  | `{ email, password }` → `{ accessToken, staff }` + cookie de refresh                                                                             |
-| `POST /api/auth/refresh`                                       | cookie + `X-Requested-With: atencion-ia` | Rota el refresh y entrega un access token nuevo                                                                                                  |
-| `POST /api/auth/logout`                                        | cookie + `X-Requested-With: atencion-ia` | Revoca la sesión                                                                                                                                 |
-| `GET /api/auth/me`                                             | staff                                    | Datos propios                                                                                                                                    |
-| `PATCH /api/staff/me/availability`                             | staff                                    | `{ availability: offline\|available\|busy\|away }`                                                                                               |
-| `GET /api/staff` · `POST /api/staff` · `PATCH /api/staff/:id`  | **admin**                                | Gestión de cuentas (política de contraseñas; desactivar cierra sesiones)                                                                         |
-| `GET /api/kb/articles` · `GET /api/kb/articles/:id`            | staff                                    | Base de conocimiento (filtros `status`, `category`, `q`; cursor)                                                                                 |
-| `POST` · `PATCH` · `DELETE /api/kb/articles/:id`               | **admin**                                | Crear/editar/borrar artículos (la versión sube si cambia título o cuerpo)                                                                        |
-| `GET /api/conversations?scope=mine\|queue\|all`                | staff (`all` solo admin)                 | Listado (cola: por prioridad; resto: por último mensaje, con cursor)                                                                             |
-| `GET /api/conversations/:id`                                   | dueño o cola                             | Detalle: cliente, escalamientos, llamadas                                                                                                        |
-| `GET /api/conversations/:id/messages`                          | dueño o cola                             | Historial, del más reciente hacia atrás, con cursor                                                                                              |
-| `POST /api/conversations/:id/take`                             | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                                                                                             |
-| `POST /api/conversations/:id/close`                            | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                                                                                                   |
-| `POST /api/conversations/:id/messages`                         | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                                                                                       |
-| `POST /api/widget/sessions`                                    | público (cliente)                        | Sesión anónima `{ displayName? }`. Con `X-Requested-With`: cookie httpOnly y **sin** token en el cuerpo; sin él (API/curl): `{ token: "wgt_…" }` |
-| `GET /api/widget/session` · `POST /api/widget/session/end`     | cliente                                  | Datos de la sesión actual · cerrarla (revoca el token y borra la cookie)                                                                         |
-| `GET` · `POST /api/widget/conversations`                       | cliente (cookie o `Bearer wgt_…`)        | Sus conversaciones (máx. 3 abiertas)                                                                                                             |
-| `GET /api/widget/conversations/:id/messages`                   | el cliente dueño                         | Historial (sin el análisis de IA ni datos internos)                                                                                              |
-| `POST /api/widget/conversations/:id/messages`                  | el cliente dueño                         | `{ content, clientMsgId? }` → motor conversacional: respuesta o traspaso                                                                         |
-| `GET /api/widget/voice/consent`                                | cliente                                  | Aviso de consentimiento vigente (versión y texto)                                                                                                |
-| `POST /api/widget/conversations/:id/calls`                     | cliente dueño                            | `{ consentVersion, accepted: true }` → llamada + formato de audio + ICE                                                                          |
-| `GET /api/widget/calls/:id` · `POST /api/widget/calls/:id/end` | cliente dueño                            | Estado de la llamada · colgar                                                                                                                    |
-| `GET /api/calls/active`                                        | staff                                    | Llamadas activas que puede ver                                                                                                                   |
-| `POST /api/calls/:id/join`                                     | agente (toma el caso si está en cola)    | Se une: devuelve la transcripción acumulada                                                                                                      |
-| `POST /api/calls/:id/leave` · `POST /api/calls/:id/end`        | el agente asignado (colgar: o admin)     | Salir de la llamada · colgarla                                                                                                                   |
-| `GET /api/calls/:id/transcript`                                | quien ve el caso                         | Transcripción (vacía si se purgó)                                                                                                                |
-| `GET /ws/voice` (upgrade)                                      | cliente o agente unido                   | Audio + señalización WebRTC (ver abajo)                                                                                                          |
-| `GET /ws` (upgrade)                                            | staff o cliente                          | Tiempo real, solo recepción (ver abajo)                                                                                                          |
-| `GET /health` · `GET /ready`                                   | sondas                                   | Liveness / readiness (Postgres + Redis)                                                                                                          |
-| `GET /metrics`                                                 | `Bearer METRICS_TOKEN`                   | Prometheus                                                                                                                                       |
+| Método y ruta                                                                         | Quién                                    | Qué hace                                                                                                                                         |
+| ------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /api/auth/login`                                                                | público                                  | `{ email, password }` → `{ accessToken, staff }` + cookie de refresh                                                                             |
+| `POST /api/auth/refresh`                                                              | cookie + `X-Requested-With: atencion-ia` | Rota el refresh y entrega un access token nuevo                                                                                                  |
+| `POST /api/auth/logout`                                                               | cookie + `X-Requested-With: atencion-ia` | Revoca la sesión                                                                                                                                 |
+| `GET /api/auth/me`                                                                    | staff                                    | Datos propios                                                                                                                                    |
+| `POST /api/auth/mfa/verify` · `/mfa/enroll/start` · `/mfa/enroll/confirm`             | token del paso 1                         | Segundo paso del login (código TOTP o de respaldo) · activación obligatoria de la MFA del admin                                                  |
+| `POST /api/auth/forgot-password` · `/reset-password`                                  | público                                  | Enlace de un solo uso por correo (misma respuesta exista o no la cuenta) · nueva contraseña (cierra todas las sesiones)                          |
+| `POST /api/auth/confirm-email`                                                        | público (token del correo)               | Confirma el cambio de correo                                                                                                                     |
+| `GET` · `PATCH /api/profile`                                                          | staff                                    | Perfil propio (nombre, teléfono, tema)                                                                                                           |
+| `POST /api/profile/email` · `/password`                                               | staff (pide la contraseña actual)        | Cambiar correo (enlace al nuevo, aviso al anterior) · cambiar contraseña                                                                         |
+| `PUT` · `DELETE /api/profile/avatar` · `GET /api/staff/:id/avatar`                    | staff                                    | Foto de perfil (recorte de 256 px)                                                                                                               |
+| `GET /api/profile/sessions` · `DELETE /sessions/:id` · `POST /sessions/revoke-others` | staff                                    | Sesiones activas (navegador, ubicación aproximada, red truncada) · cerrar una · cerrar las demás                                                 |
+| `POST /api/profile/mfa/setup` · `/confirm` · `/disable` · `/backup-codes`             | staff                                    | Verificación en dos pasos y códigos de respaldo                                                                                                  |
+| `GET /api/profile/export`                                                             | staff                                    | Sus datos personales en JSON (sin secretos ni contenido de clientes)                                                                             |
+| `GET /api/staff/:id/export` · `POST /api/staff/:id/anonymize`                         | **admin**                                | Exportar los datos de un asesor · anonimizar su cuenta (409 si tiene casos en curso; [docs/data-retention.md](docs/data-retention.md))           |
+| `POST /api/conversations/:id/reassign`                                                | **admin**                                | `{ agentId }`: pasa un caso en curso a otra persona                                                                                              |
+| `POST /api/conversations/:id/attachments` · `GET …/attachments/:attachmentId`         | el asignado · quien ve el caso           | Adjuntar (imagen o PDF, ≤ 5 MB) · descargar ([docs/attachments.md](docs/attachments.md))                                                         |
+| `GET /api/canned-responses` · `POST` · `PATCH` · `DELETE /:id`                        | staff (lectura) · **admin** (escritura)  | Respuestas predefinidas con `{cliente}` y `{asesor}`                                                                                             |
+| `GET /api/admin/analytics?days=`                                                      | **admin**                                | Tiempos de resolución, tasa de escalamiento, CSAT **simulado** y volumen por hora ([docs/analytics.md](docs/analytics.md))                       |
+| `PATCH /api/staff/me/availability`                                                    | staff                                    | `{ availability: offline\|available\|busy\|away }`                                                                                               |
+| `GET /api/staff` · `POST /api/staff` · `PATCH /api/staff/:id`                         | **admin**                                | Gestión de cuentas (política de contraseñas; desactivar cierra sesiones)                                                                         |
+| `GET /api/kb/articles` · `GET /api/kb/articles/:id`                                   | staff                                    | Base de conocimiento (filtros `status`, `category`, `q`; cursor)                                                                                 |
+| `POST` · `PATCH` · `DELETE /api/kb/articles/:id`                                      | **admin**                                | Crear/editar/borrar artículos (la versión sube si cambia título o cuerpo)                                                                        |
+| `GET /api/conversations?scope=mine\|queue\|all`                                       | staff (`all` solo admin)                 | Listado (cola: por prioridad; resto: por último mensaje, con cursor)                                                                             |
+| `GET /api/conversations/:id`                                                          | dueño o cola                             | Detalle: cliente, escalamientos, llamadas                                                                                                        |
+| `GET /api/conversations/:id/messages`                                                 | dueño o cola                             | Historial, del más reciente hacia atrás, con cursor                                                                                              |
+| `POST /api/conversations/:id/take`                                                    | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                                                                                             |
+| `POST /api/conversations/:id/close`                                                   | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                                                                                                   |
+| `POST /api/conversations/:id/messages`                                                | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                                                                                       |
+| `POST /api/widget/sessions`                                                           | público (cliente)                        | Sesión anónima `{ displayName? }`. Con `X-Requested-With`: cookie httpOnly y **sin** token en el cuerpo; sin él (API/curl): `{ token: "wgt_…" }` |
+| `GET /api/widget/session` · `POST /api/widget/session/end`                            | cliente                                  | Datos de la sesión actual · cerrarla (revoca el token y borra la cookie)                                                                         |
+| `GET` · `POST /api/widget/conversations`                                              | cliente (cookie o `Bearer wgt_…`)        | Sus conversaciones (máx. 3 abiertas)                                                                                                             |
+| `GET /api/widget/conversations/:id/messages`                                          | el cliente dueño                         | Historial (sin el análisis de IA ni datos internos)                                                                                              |
+| `POST /api/widget/conversations/:id/messages`                                         | el cliente dueño                         | `{ content, clientMsgId? }` → motor conversacional: respuesta o traspaso                                                                         |
+| `POST /api/widget/conversations/:id/attachments` · `GET /api/widget/attachments/:id`  | el cliente dueño                         | Adjuntar una imagen o un PDF (la IA solo recibe la señal de que existe) · descargar                                                              |
+| `GET /api/widget/voice/consent`                                                       | cliente                                  | Aviso de consentimiento vigente (versión y texto)                                                                                                |
+| `POST /api/widget/conversations/:id/calls`                                            | cliente dueño                            | `{ consentVersion, accepted: true }` → llamada + formato de audio + ICE                                                                          |
+| `GET /api/widget/calls/:id` · `POST /api/widget/calls/:id/end`                        | cliente dueño                            | Estado de la llamada · colgar                                                                                                                    |
+| `GET /api/calls/active`                                                               | staff                                    | Llamadas activas que puede ver                                                                                                                   |
+| `POST /api/calls/:id/join`                                                            | agente (toma el caso si está en cola)    | Se une: devuelve la transcripción acumulada                                                                                                      |
+| `POST /api/calls/:id/leave` · `POST /api/calls/:id/end`                               | el agente asignado (colgar: o admin)     | Salir de la llamada · colgarla                                                                                                                   |
+| `GET /api/calls/:id/transcript`                                                       | quien ve el caso                         | Transcripción (vacía si se purgó)                                                                                                                |
+| `GET /ws/voice` (upgrade)                                                             | cliente o agente unido                   | Audio + señalización WebRTC (ver abajo)                                                                                                          |
+| `GET /ws` (upgrade)                                                                   | staff o cliente                          | Tiempo real, solo recepción (ver abajo)                                                                                                          |
+| `GET /health` · `GET /ready`                                                          | sondas                                   | Liveness / readiness (Postgres + Redis)                                                                                                          |
+| `GET /metrics`                                                                        | `Bearer METRICS_TOKEN`                   | Prometheus                                                                                                                                       |
 
 ### Quién ve qué (autorización por dueño)
 
@@ -267,7 +294,7 @@ npm test
 ```
 
 Recrean una base `atencion_ia_test` aplicando las migraciones **reales** del repo hermano
-(con sus CHECKs e índices parciales). Redis y las colas se simulan. 280 tests en 27 archivos: unitarios (política de
+(con sus CHECKs e índices parciales). Redis y las colas se simulan. 413 tests en 34 archivos: unitarios (política de
 contraseñas, bloqueo, tokens, acceso, versionado de la KB, paginación, redacción de logs,
 apagado, reglas de escalamiento, proveedor mock, adaptadores de Claude y Voyage con clientes
 simulados, prompt injection, fragmentación) y de integración (sesión completa, CSRF, rate limit,
@@ -275,10 +302,14 @@ aislamiento entre agentes y entre clientes, carreras, idempotencia, KB, staff, m
 conversacional, aislamiento del RAG, indexación, avisos, sondas, métricas, sesión del widget
 por cookie con CSRF y WebSocket real: Origin, autenticación, qué recibe cada destinatario y cierre al vencer)
 y de voz (proveedores mock y Deepgram con dobles, llamada completa con el motor real, aislamiento de la
-señalización entre llamadas e instancias, permisos, topes, gracia, barrido y purga).
+señalización entre llamadas e instancias, permisos, topes, gracia, barrido y purga). Fase 7: TOTP y
+códigos de respaldo, enlaces de un solo uso, bloqueo, sesiones con IP truncada, perfil y foto,
+anonimización y exportación, guardas por rol de la administración, analítica, respuestas
+predefinidas y adjuntos (validación del archivo, PDF con contenido activo, y que la IA nunca reciba
+el contenido ni el nombre del archivo).
 
 Además: `npm run test:shuffle` (orden aleatorio: sin dependencias ocultas entre tests) y
-`npm run test:mutations` (39/39 reglas críticas rotas a propósito son detectadas).
+`npm run test:mutations` (90/90 reglas críticas rotas a propósito son detectadas).
 
 **CI** (`.github/workflows/ci.yml`, en cada push):
 
@@ -308,6 +339,9 @@ set TOKEN=pega_aqui_el_token
 curl -s -H "Authorization: Bearer %TOKEN%" http://localhost:4100/api/conversations/c0000000-0000-4000-8000-000000000003
 curl -s -H "Authorization: Bearer %TOKEN%" http://localhost:4100/api/conversations/c0000000-0000-4000-8000-000000000007
 ```
+
+Recorrido completo de la Fase 7 (identidad, administración, adjuntos, llamada en vivo y estados de la
+interfaz): [docs/demo-fase7.md](docs/demo-fase7.md).
 
 Cuentas del seed: `admin@`, `laura@`, `diego@cordillera.example` (contraseña
 `Password123!`; ver el README de `atencion-ia-database`).
