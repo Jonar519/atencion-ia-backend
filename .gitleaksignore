@@ -7,3 +7,6 @@ c92ad1a7501a3ec5a10c276475af8ed56a4fe3dc:.env.example:generic-api-key:17
 # Fase 7: contraseña nueva FICTICIA de los tests de perfil y de recuperación (revisada a mano).
 ce27fb0569c5bd31e06104f0652836d4bc3267fc:tests/integration/profile.test.ts:generic-api-key:37
 212d3d8cdcad1f4b964a4ad12e613a4665c22f31:tests/integration/recoveryAndMfa.test.ts:generic-api-key:21
+212d3d8cdcad1f4b964a4ad12e613a4665c22f31:tests/integration/recoveryAndMfa.test.ts:generic-api-key:106
+212d3d8cdcad1f4b964a4ad12e613a4665c22f31:tests/integration/recoveryAndMfa.test.ts:generic-api-key:116
+212d3d8cdcad1f4b964a4ad12e613a4665c22f31:tests/integration/recoveryAndMfa.test.ts:generic-api-key:117
