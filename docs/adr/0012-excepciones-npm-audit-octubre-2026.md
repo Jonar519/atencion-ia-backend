@@ -2,7 +2,8 @@
 
 **Estado:** aceptada (auditoría de dependencias del 29-10-2026, aprobada por el usuario).
 **Revisión:** nodemailer el **2026-11-01**; body-parser el **2026-11-05**; zod y autocannon el
-**2026-11-30**.
+**2026-11-13** (decisión explícita antes de la entrega del 17 de noviembre: migrar o entregar
+con la excepción declarada).
 
 ## Contexto
 
@@ -68,8 +69,8 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
       el array externo sí tiene `.max(5)`.
     - `src/services/ai/voyage.provider.ts`: `data` y `embedding`. Es la respuesta de la API de
       Voyage por HTTPS, enviada en lotes de 64 textos como máximo.
-- **Revisión (2026-11-30):** decidir la fecha de la migración a zod 4 o renovar esta excepción
-  con nueva fecha.
+- **Revisión (2026-11-13):** decisión explícita antes de la entrega del 17 de noviembre: migrar o
+  entregar con la excepción declarada.
 
 ### 4. uuid 8.3.2 / hyperid 3.3.0 / autocannon 8.0.0 — moderado, solo desarrollo (GHSA-w5hq-g745-h8pq)
 
@@ -78,8 +79,9 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
 - **Por qué no se corrige:** `autocannon` solo se usa en las pruebas de carga (`loadtests/`) y
   no llega a producción. El "arreglo" de `npm audit fix --force` **bajaría** autocannon a 2.0.1,
   lo que no tiene sentido.
-- **Revisión (2026-11-30):** comprobar si hay una versión de autocannon/hyperid que use
-  `uuid >= 11.1.1`.
+- **Revisión (2026-11-13):** comprobar si hay una versión de autocannon/hyperid que use
+  `uuid >= 11.1.1`. Decisión explícita antes de la entrega del 17 de noviembre: migrar o
+  entregar con la excepción declarada.
 
 ## Alternativas consideradas
 
