@@ -122,5 +122,8 @@ jobs:
           node-version: 24
       - name: npm audit (dependencias de producción)
         run: npm audit --omit=dev --audit-level=moderate
+        # Informativo mientras rigen las excepciones de docs/adr/0012-excepciones-npm-audit-octubre-2026.md.
+        # Quitar el 5-nov cuando se cierre body-parser/nodemailer; revisar zod el 13-nov.
+        continue-on-error: true
       - name: gitleaks (secretos en el historial)
         run: docker run --rm -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:v8.21.2 git /repo --redact --verbose
