@@ -183,4 +183,9 @@ temporales** (29-10-2026, [ADR 0012](adr/0012-excepciones-npm-audit-octubre-2026
 
 Mitigación: cuerpo JSON de 100 KB como máximo, limitador global por IP, `.max()` en el único
 array zod que llega de un cliente y destinatarios validados con `.email()` y con un `CHECK` en
-la base. Hasta entonces, el job `security` falla a propósito.
+la base.
+
+CI: desde la rama `ci/security-informativo`, el paso de `npm audit` de producción es
+**informativo** (`continue-on-error: true`). El job `security` queda en verde aunque el audit siga
+mostrando los avisos. El log del paso sigue siendo la evidencia. Vuelve a ser bloqueante al cerrar
+body-parser y nodemailer (5-nov); desde entonces solo zod lo hará fallar, con decisión el 13-nov.

@@ -92,9 +92,12 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
 
 ## Consecuencias
 
-- El job `security` del CI (`npm audit --omit=dev --audit-level=moderate`) **seguirá fallando**
-  por nodemailer, body-parser y zod hasta que se cierren estas excepciones. Es esperado y no
-  debe silenciarse.
+- Desde la rama `ci/security-informativo`, el paso de `npm audit` de producción del job `security`
+  (`npm audit --omit=dev --audit-level=moderate`) es **informativo** (`continue-on-error: true`).
+  El job queda en verde aunque el audit siga mostrando nodemailer, body-parser y zod.
+- **El log del paso sigue siendo la evidencia:** ahí se ven los avisos en cada push.
+- **Vuelve a ser bloqueante al cerrar body-parser y nodemailer (5-nov).** Desde entonces solo zod
+  lo hará fallar, con decisión el 13-nov.
 - Cada fecha de revisión obliga a cerrar la excepción o renovarla por escrito.
 
 ## Evidencia
