@@ -19,6 +19,7 @@ En la rama `chore/audit-oct` ya se corrigió lo que cumplía ambas reglas:
 - `ip-address` 10.7.4, `qs` 6.16.1 y `source-map-js` 1.2.2 (solo lockfile).
 - `vite` 8.3.4 por override, con sus transitivas (`rolldown` 1.2.14, `postcss` 8.5.30…), todas
   con 14 días o más.
+- `vitest` 4.1.12, que quita el moderado de `@vitest/mocker`.
 
 Quedan cuatro avisos, que se aceptan aquí de forma temporal.
 
@@ -79,12 +80,6 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
   lo que no tiene sentido.
 - **Revisión (2026-11-30):** comprobar si hay una versión de autocannon/hyperid que use
   `uuid >= 11.1.1`.
-
-## Fuera de esta excepción
-
-Siguen pendientes, solo por la regla de 14 días: `vitest` 4.1.12 (corrige el moderado de
-`@vitest/mocker`; cumple los 14 días el 29-10-2026 a las 14:51 UTC). No es una excepción
-aceptada: se aplica en cuanto cumple la regla.
 
 ## Alternativas consideradas
 
