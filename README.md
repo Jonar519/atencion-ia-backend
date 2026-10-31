@@ -321,7 +321,8 @@ Además: `npm run test:shuffle` (orden aleatorio: sin dependencias ocultas entre
 - lint, typecheck, tests, tests en orden aleatorio y build contra un Postgres de servicio, con las
   migraciones del repo `atencion-ia-database`;
 - las pruebas de mutación, en un job aparte;
-- `npm audit` de las dependencias de producción y gitleaks sobre todo el historial.
+- `npm audit` de las dependencias de producción y gitleaks sobre todo el historial (excepciones
+  vigentes, con fecha de revisión: [ADR 0012](docs/adr/0012-excepciones-npm-audit-octubre-2026.md)).
 
 **Carga:** [docs/load-test-report.md](docs/load-test-report.md). Con una IA de 300 ms por llamada,
 el turno pasó de ~1050 a ~732 ms y el throughput de ~45 a ~67 req/s al paralelizar la

@@ -165,6 +165,27 @@ indique el repo.
 | Proveedores **reales** sin verificar      | Retención de datos y comportamiento real de Anthropic, Voyage y Deepgram    | Probar con credenciales (cierre del proyecto)                                                                                                                |
 | Límite de **conexiones WebSocket por IP** | Agotar sockets o memoria                                                    | En el proxy del despliegue                                                                                                                                   |
 
-**Dependencias:** `npm audit --omit=dev` sale sin vulnerabilidades en el backend y en el frontend.
-Lo verifica la CI en cada push (`.github/workflows/ci.yml`, job `security`), junto con gitleaks
-sobre todo el historial.
+**Dependencias:** la CI ejecuta `npm audit --omit=dev` en cada push (`.github/workflows/ci.yml`,
+job `security`), junto con gitleaks sobre todo el historial.
+
+En el frontend sale sin vulnerabilidades de producción. En el backend hay **excepciones
+temporales** (29-10-2026, [ADR 0012](adr/0012-excepciones-npm-audit-octubre-2026.md)):
+
+- `nodemailer` 10.0.13, moderado: destinatarios mal interpretados. Se corrige con 10.1.4 el
+  **2026-11-01**.
+- `body-parser` 1.20.8, alto: DoS con cuerpo comprimido. Se corrige con 1.20.9 el
+  **2026-11-05**.
+- `zod` 3.25.76, alto: agota memoria con colecciones enormes. No hay corrección en zod 3; se
+  revisa el **2026-11-13**.
+- `uuid`/`hyperid`/`autocannon`, moderado, solo desarrollo. Se revisa el **2026-11-13**.
+- Para zod y uuid/hyperid/autocannon: decisión explícita antes de la entrega del 17 de noviembre:
+  migrar o entregar con la excepción declarada.
+
+Mitigación: cuerpo JSON de 100 KB como máximo, limitador global por IP, `.max()` en el único
+array zod que llega de un cliente y destinatarios validados con `.email()` y con un `CHECK` en
+la base.
+
+CI: desde la rama `ci/security-informativo`, el paso de `npm audit` de producción es
+**informativo** (`continue-on-error: true`). El job `security` queda en verde aunque el audit siga
+mostrando los avisos. El log del paso sigue siendo la evidencia. Vuelve a ser bloqueante al cerrar
+body-parser y nodemailer (5-nov); desde entonces solo zod lo hará fallar, con decisión el 13-nov.
