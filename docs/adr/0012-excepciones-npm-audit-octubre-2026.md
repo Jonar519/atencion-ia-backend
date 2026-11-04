@@ -1,7 +1,7 @@
 # 0012 — Excepciones temporales de `npm audit` (octubre 2026)
 
 **Estado:** aceptada (auditoría de dependencias del 29-10-2026, aprobada por el usuario).
-**Revisión:** nodemailer el **2026-11-01**; body-parser el **2026-11-05**; zod y autocannon el
+**Revisión:** nodemailer el **2026-11-01** (**cerrada el 2026-11-04**, ver abajo); body-parser el **2026-11-05**; zod y autocannon el
 **2026-11-13** (decisión explícita antes de la entrega del 17 de noviembre: migrar o entregar
 con la excepción declarada).
 
@@ -22,11 +22,22 @@ En la rama `chore/audit-oct` ya se corrigió lo que cumplía ambas reglas:
   con 14 días o más.
 - `vitest` 4.1.12, que quita el moderado de `@vitest/mocker`.
 
-Quedan cuatro avisos, que se aceptan aquí de forma temporal.
+Quedaban cuatro avisos, que se aceptan aquí de forma temporal. El de nodemailer se cerró el
+2026-11-04 (sección 1). El 2026-11-04 apareció un aviso nuevo, solo de desarrollo (`minimatch`,
+sección 5), que **no** es una excepción aceptada: está pendiente de decisión.
 
 ## Decisión
 
-### 1. nodemailer 10.0.13 — moderado, producción
+### 1. nodemailer 10.0.13 — moderado, producción — **CERRADA el 2026-11-04**
+
+> **Cierre (2026-11-04, rama `chore/nodemailer`):** `nodemailer` sube a `^10.1.4`. Esa versión
+> se publicó el 2026-10-18T11:59:56Z (`npm view nodemailer time`), así que tenía 17 días al
+> instalarse. No tiene dependencias, así que no entra ninguna transitiva nueva. El lockfile
+> cambia solo en el rango de la raíz y en la entrada `node_modules/nodemailer` (versión,
+> `resolved`, `integrity`). Sin `npm audit fix`. `npm audit --omit=dev` ya no muestra
+> nodemailer. Pasó el CI local (Windows y una réplica en Linux: Ubuntu 24.04 con Node 24):
+> lint, typecheck, 429 tests (también en orden aleatorio), build y 99/99 mutaciones. Las
+> mitigaciones de abajo se quedan como defensa aparte.
 
 Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
 
@@ -83,6 +94,27 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
   `uuid >= 11.1.1`. Decisión explícita antes de la entrega del 17 de noviembre: migrar o
   entregar con la excepción declarada.
 
+### 5. minimatch 10.2.6 — moderado, solo desarrollo (GHSA-g3hv-75wg-m249) — **aviso nuevo, pendiente de decisión**
+
+- **Aviso** (publicado el 2026-10-30, visto en el `npm audit` del 2026-11-04): denegación de
+  servicio por amplificación de `globparts`. Afecta a `>=7.0.0 <11.0.1`.
+- **Dónde:** solo en desarrollo, por `eslint` 10.11.0 (`^10.2.5`), `@eslint/config-array`
+  (`^10.2.4`) y `@typescript-eslint/typescript-estree` 8.71.0 (`^10.2.2`). Ya estaba en `main`
+  antes de este cambio (10.2.6), y el paso de producción del CI (`--omit=dev`) no lo ve.
+  Explica 10 de los 13 avisos moderados del `npm audit` completo (los otros 3 son la sección 4),
+  porque se propaga a eslint y
+  typescript-eslint.
+- **Por qué no se corrige hoy:**
+  - la única corrección es `11.0.1`, de una versión mayor que la que piden eslint y
+    typescript-eslint. Haría falta un override a través de esa versión mayor;
+  - además, `11.0.1` se publicó el 2026-10-27 y cumple 14 días el **2026-11-10**.
+  - El "arreglo" de `npm audit fix --force` **bajaría** eslint a 9.39.5 y typescript-eslint a
+    8.36.0. Se descarta.
+- **Exposición:** `minimatch` solo procesa los globs de la configuración de eslint, que son del
+  propio repo, no entradas de usuarios.
+- **Pendiente:** el usuario decide si se acepta como excepción (con fecha de revisión) o si se
+  espera a que eslint y typescript-eslint pidan `minimatch` 11.
+
 ## Alternativas consideradas
 
 - **Instalar las versiones nuevas ya:** rompe la regla de 14 días, cuyo fin es no ser de los
@@ -96,7 +128,7 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
   (`npm audit --omit=dev --audit-level=moderate`) es **informativo** (`continue-on-error: true`).
   El job queda en verde aunque el audit siga mostrando nodemailer, body-parser y zod.
 - **El log del paso sigue siendo la evidencia:** ahí se ven los avisos en cada push.
-- **Vuelve a ser bloqueante al cerrar body-parser y nodemailer (5-nov).** Desde entonces solo zod
+- **Vuelve a ser bloqueante al cerrar body-parser (5-nov)**. nodemailer ya se cerró el 4-nov. Desde entonces solo zod
   lo hará fallar, con decisión el 13-nov.
 - Cada fecha de revisión obliga a cerrar la excepción o renovarla por escrito.
 
