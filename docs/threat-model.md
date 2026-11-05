@@ -173,8 +173,8 @@ temporales** (29-10-2026, [ADR 0012](adr/0012-excepciones-npm-audit-octubre-2026
 
 - ~~`nodemailer` 10.0.13, moderado: destinatarios mal interpretados.~~ **Cerrada el
   2026-11-04:** 10.1.4 (17 días de publicada, sin transitivas nuevas).
-- `body-parser` 1.20.8, alto: DoS con cuerpo comprimido. Se corrige con 1.20.9 el
-  **2026-11-05**.
+- ~~`body-parser` 1.20.8, alto: DoS con cuerpo comprimido.~~ **Cerrada el 2026-11-05:**
+  1.20.9 (14 días de publicada, solo el lockfile, sin override; `qs` sigue en 6.16.1).
 - `zod` 3.25.76, alto: agota memoria con colecciones enormes. No hay corrección en zod 3; se
   revisa el **2026-11-13**.
 - `uuid`/`hyperid`/`autocannon`, moderado, solo desarrollo. Se revisa el **2026-11-13**.
@@ -189,5 +189,6 @@ la base.
 
 CI: desde la rama `ci/security-informativo`, el paso de `npm audit` de producción es
 **informativo** (`continue-on-error: true`). El job `security` queda en verde aunque el audit siga
-mostrando los avisos. El log del paso sigue siendo la evidencia. Vuelve a ser bloqueante al cerrar
-body-parser (5-nov; nodemailer ya se cerró el 4-nov); desde entonces solo zod lo hará fallar, con decisión el 13-nov.
+mostrando los avisos. El log del paso sigue siendo la evidencia. Sigue informativo
+**hasta el 13-nov** (decisión del 4-nov): cerrar body-parser el 5-nov no basta, porque zod lo
+dejaría en rojo. Se decide junto con zod.
