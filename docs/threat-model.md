@@ -180,8 +180,9 @@ temporales** (29-10-2026, [ADR 0012](adr/0012-excepciones-npm-audit-octubre-2026
 - `uuid`/`hyperid`/`autocannon`, moderado, solo desarrollo. Se revisa el **2026-11-13**.
 - Para zod y uuid/hyperid/autocannon: decisión explícita antes de la entrega del 17 de noviembre:
   migrar o entregar con la excepción declarada.
-- Aviso nuevo del 2026-11-04, solo de desarrollo y **pendiente de decisión**: `minimatch` 10.2.6
-  (GHSA-g3hv-75wg-m249), por eslint. Ver la sección 5 del ADR 0012.
+- `minimatch` 10.2.6 (GHSA-g3hv-75wg-m249), moderado, solo de desarrollo, por eslint:
+  excepción aceptada el 2026-11-04, sin overrides. Se revisa el **2026-11-13**, o antes si eslint
+  pide `minimatch` 11 (sección 5 del ADR 0012).
 
 Mitigación: cuerpo JSON de 100 KB como máximo, limitador global por IP, `.max()` en el único
 array zod que llega de un cliente y destinatarios validados con `.email()` y con un `CHECK` en
@@ -189,5 +190,6 @@ la base.
 
 CI: desde la rama `ci/security-informativo`, el paso de `npm audit` de producción es
 **informativo** (`continue-on-error: true`). El job `security` queda en verde aunque el audit siga
-mostrando los avisos. El log del paso sigue siendo la evidencia. Vuelve a ser bloqueante al cerrar
-body-parser (5-nov; nodemailer ya se cerró el 4-nov); desde entonces solo zod lo hará fallar, con decisión el 13-nov.
+mostrando los avisos. El log del paso sigue siendo la evidencia. Sigue informativo
+**hasta el 13-nov** (decisión del 4-nov): cerrar body-parser el 5-nov no basta, porque zod lo
+dejaría en rojo. Se decide junto con zod.

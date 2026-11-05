@@ -3,7 +3,8 @@
 **Estado:** aceptada (auditoría de dependencias del 29-10-2026, aprobada por el usuario).
 **Revisión:** nodemailer el **2026-11-01** (**cerrada el 2026-11-04**, ver abajo); body-parser el **2026-11-05**; zod y autocannon el
 **2026-11-13** (decisión explícita antes de la entrega del 17 de noviembre: migrar o entregar
-con la excepción declarada).
+con la excepción declarada); minimatch el **2026-11-13**, o antes si eslint pide `minimatch` 11
+(sección 5).
 
 ## Contexto
 
@@ -24,7 +25,7 @@ En la rama `chore/audit-oct` ya se corrigió lo que cumplía ambas reglas:
 
 Quedaban cuatro avisos, que se aceptan aquí de forma temporal. El de nodemailer se cerró el
 2026-11-04 (sección 1). El 2026-11-04 apareció un aviso nuevo, solo de desarrollo (`minimatch`,
-sección 5), que **no** es una excepción aceptada: está pendiente de decisión.
+sección 5), que el usuario aceptó ese mismo día como excepción documentada.
 
 ## Decisión
 
@@ -94,7 +95,7 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
   `uuid >= 11.1.1`. Decisión explícita antes de la entrega del 17 de noviembre: migrar o
   entregar con la excepción declarada.
 
-### 5. minimatch 10.2.6 — moderado, solo desarrollo (GHSA-g3hv-75wg-m249) — **aviso nuevo, pendiente de decisión**
+### 5. minimatch 10.2.6 — moderado, solo desarrollo (GHSA-g3hv-75wg-m249) — **excepción aceptada el 2026-11-04**
 
 - **Aviso** (publicado el 2026-10-30, visto en el `npm audit` del 2026-11-04): denegación de
   servicio por amplificación de `globparts`. Afecta a `>=7.0.0 <11.0.1`.
@@ -102,8 +103,7 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
   (`^10.2.4`) y `@typescript-eslint/typescript-estree` 8.71.0 (`^10.2.2`). Ya estaba en `main`
   antes de este cambio (10.2.6), y el paso de producción del CI (`--omit=dev`) no lo ve.
   Explica 10 de los 13 avisos moderados del `npm audit` completo (los otros 3 son la sección 4),
-  porque se propaga a eslint y
-  typescript-eslint.
+  porque se propaga a eslint y typescript-eslint.
 - **Por qué no se corrige hoy:**
   - la única corrección es `11.0.1`, de una versión mayor que la que piden eslint y
     typescript-eslint. Haría falta un override a través de esa versión mayor;
@@ -112,8 +112,12 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
     8.36.0. Se descarta.
 - **Exposición:** `minimatch` solo procesa los globs de la configuración de eslint, que son del
   propio repo, no entradas de usuarios.
-- **Pendiente:** el usuario decide si se acepta como excepción (con fecha de revisión) o si se
-  espera a que eslint y typescript-eslint pidan `minimatch` 11.
+- **Decisión (2026-11-04, aprobada por el usuario):** se acepta como **excepción documentada**:
+  moderado, solo de desarrollo y **sin overrides**. No se fuerza `minimatch` 11 por encima de
+  lo que piden eslint y typescript-eslint.
+- **Revisión (2026-11-13), o antes** si eslint pasa a pedir `minimatch` 11 y la versión
+  corregida ya cumple 14 días (11.0.1, desde el 2026-11-10). La nueva versión de eslint también
+  tiene que cumplir los 14 días, y sus transitivas igual.
 
 ## Alternativas consideradas
 
@@ -128,8 +132,10 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
   (`npm audit --omit=dev --audit-level=moderate`) es **informativo** (`continue-on-error: true`).
   El job queda en verde aunque el audit siga mostrando nodemailer, body-parser y zod.
 - **El log del paso sigue siendo la evidencia:** ahí se ven los avisos en cada push.
-- **Vuelve a ser bloqueante al cerrar body-parser (5-nov)**. nodemailer ya se cerró el 4-nov. Desde entonces solo zod
-  lo hará fallar, con decisión el 13-nov.
+- **Sigue informativo hasta el 13-nov** (decisión del 2026-11-04). Cerrar body-parser el 5-nov
+  no basta para volverlo bloqueante: zod sigue siendo un aviso alto de producción y lo dejaría
+  en rojo. Se decide el 13-nov, junto con zod. minimatch no cuenta para este paso, que usa
+  `--omit=dev`.
 - Cada fecha de revisión obliga a cerrar la excepción o renovarla por escrito.
 
 ## Evidencia
