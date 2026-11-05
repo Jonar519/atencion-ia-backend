@@ -171,8 +171,8 @@ job `security`), junto con gitleaks sobre todo el historial.
 En el frontend sale sin vulnerabilidades de producción. En el backend hay **excepciones
 temporales** (29-10-2026, [ADR 0012](adr/0012-excepciones-npm-audit-octubre-2026.md)):
 
-- `nodemailer` 10.0.13, moderado: destinatarios mal interpretados. Se corrige con 10.1.4 el
-  **2026-11-01**.
+- ~~`nodemailer` 10.0.13, moderado: destinatarios mal interpretados.~~ **Cerrada el
+  2026-11-04:** 10.1.4 (17 días de publicada, sin transitivas nuevas).
 - `body-parser` 1.20.8, alto: DoS con cuerpo comprimido. Se corrige con 1.20.9 el
   **2026-11-05**.
 - `zod` 3.25.76, alto: agota memoria con colecciones enormes. No hay corrección en zod 3; se
@@ -180,6 +180,8 @@ temporales** (29-10-2026, [ADR 0012](adr/0012-excepciones-npm-audit-octubre-2026
 - `uuid`/`hyperid`/`autocannon`, moderado, solo desarrollo. Se revisa el **2026-11-13**.
 - Para zod y uuid/hyperid/autocannon: decisión explícita antes de la entrega del 17 de noviembre:
   migrar o entregar con la excepción declarada.
+- Aviso nuevo del 2026-11-04, solo de desarrollo y **pendiente de decisión**: `minimatch` 10.2.6
+  (GHSA-g3hv-75wg-m249), por eslint. Ver la sección 5 del ADR 0012.
 
 Mitigación: cuerpo JSON de 100 KB como máximo, limitador global por IP, `.max()` en el único
 array zod que llega de un cliente y destinatarios validados con `.email()` y con un `CHECK` en
@@ -188,4 +190,4 @@ la base.
 CI: desde la rama `ci/security-informativo`, el paso de `npm audit` de producción es
 **informativo** (`continue-on-error: true`). El job `security` queda en verde aunque el audit siga
 mostrando los avisos. El log del paso sigue siendo la evidencia. Vuelve a ser bloqueante al cerrar
-body-parser y nodemailer (5-nov); desde entonces solo zod lo hará fallar, con decisión el 13-nov.
+body-parser (5-nov; nodemailer ya se cerró el 4-nov); desde entonces solo zod lo hará fallar, con decisión el 13-nov.
