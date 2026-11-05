@@ -55,8 +55,12 @@ Avisos: GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w y GHSA-85x2-q946-cp5h.
   - El proveedor por defecto es `mock`, que no usa nodemailer: SMTP solo se activa con
     credenciales reales.
 
-### 2. body-parser 1.20.8 — alto, producción (GHSA-27r3-jxmh-p828)
+### 2. body-parser 1.20.8 — alto, producción (GHSA-27r3-jxmh-p828) — **cerrada el 2026-11-05**
 
+- **Cierre (2026-11-05):** `npm update body-parser --before=2026-10-22T11:40:00Z`, sin override.
+  El lockfile cambia en una sola entrada: `body-parser` 1.20.8 → **1.20.9** (publicada el
+  2026-10-22 a las 11:38:27 UTC; 14 días cumplidos). `qs` sigue en 6.16.1: `--before` impide que
+  entren 6.16.2 o 6.17.x, que aún no cumplen 14 días. `npm audit` ya no muestra este aviso.
 - **Aviso:** denegación de servicio con bytes sobrantes después de un cuerpo comprimido.
 - **Por qué no se corrige hoy:** la corrección, `1.20.9`, se publicó el 2026-10-22 y cumple 14
   días el **2026-11-05**.
