@@ -1,0 +1,24 @@
+# Lo que NUNCA entra en la imagen (ni al contexto del build).
+.env
+.env.*
+!.env.example
+.git
+node_modules
+dist
+coverage
+*.log
+*.mmdb
+loadtests/.state.json
+
+# No hace falta para construir ni para correr.
+tests
+loadtests
+docs
+scripts
+.github
+.gitleaks*
+.prettier*
+eslint.config.js
+vitest.config.ts
+tsconfig.test.json
+README.md
