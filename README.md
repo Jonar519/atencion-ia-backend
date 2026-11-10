@@ -290,6 +290,29 @@ escalamiento, las capas de aislamiento del RAG, las pruebas de mutación y la ca
   cambios de staff y KB, ver/tomar/cerrar/responder conversaciones. Sin correos de
   logins fallidos ni contenido de mensajes; IP como HMAC.
 
+## Contenedor (Docker · despliegue en Railway)
+
+Una sola imagen para la API y el worker ([`Dockerfile`](Dockerfile), Node 24 sobre Debian 12, sin
+root). Cambia solo el comando:
+
+| Servicio | Comando de arranque                 | Salud                              |
+| -------- | ----------------------------------- | ---------------------------------- |
+| API      | por defecto (`node dist/server.js`) | `/ready` (en `PORT`)               |
+| Worker   | `node dist/workers/worker.js`       | `/health` en `WORKER_METRICS_PORT` |
+
+```bat
+docker build -t atencion-ia-backend .
+docker run --rm -p 4100:4100 --env-file .env.produccion atencion-ia-backend
+```
+
+- **`node` directo, nunca `npm start`:** npm no reenvía SIGTERM y se perdería el apagado ordenado.
+- **Sin secretos en la imagen:** `.dockerignore` deja fuera `.env`. Las variables las pone la
+  plataforma; el worker necesita las mismas obligatorias que la API.
+- **Las migraciones no corren al arrancar:** van aparte, con `atencion-ia-database`.
+- **Scripts de operación compilados** (la imagen no trae `tsx`): `npm run kb:reindex:start`
+  (obligatorio al pasar de `mock` a Voyage: los vectores de un modelo no sirven para otro),
+  `npm run staff:reset-mfa:start -- correo` y `npm run storage:purge:start`.
+
 ## Tests
 
 ```bat
