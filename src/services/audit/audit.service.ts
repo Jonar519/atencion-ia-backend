@@ -41,6 +41,7 @@ export type AuditAction =
   | "canned.create"
   | "canned.update"
   | "canned.delete"
+  | "staff.first_admin_created"
   | "staff.invite"
   | "staff.invitation_resent"
   | "staff.invitation_cancelled"

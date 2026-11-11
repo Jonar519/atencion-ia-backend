@@ -7,19 +7,16 @@ import { mfaService } from "./mfa.service";
 import { ClientInfo, SessionResult, sessionsService } from "./sessions.service";
 import { consumeToken, findLiveToken, issueToken, registerFailedAttempt } from "./singleUseTokens";
 
+import { normalizeEmail } from "./normalizeEmail";
+
 // Re-exportado: otros módulos lo importan desde aquí.
-export { BCRYPT_COST, passwordMatches };
+export { BCRYPT_COST, normalizeEmail, passwordMatches };
 
 // Mismo mensaje para "no existe", "contraseña incorrecta" y "cuenta
 // desactivada": no se revela qué correos tienen cuenta.
 export const INVALID_CREDENTIALS = "Credenciales inválidas";
 export const INVALID_MFA_CODE = "El código no es correcto";
 export const MFA_STEP_EXPIRED = "El paso de verificación venció o ya se usó. Inicia sesión de nuevo.";
-
-/** Los correos se guardan y se buscan siempre en minúsculas (la base lo exige con un CHECK). */
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
 
 export class AccountLockedError extends ApiError {
   constructor(remainingMs: number) {

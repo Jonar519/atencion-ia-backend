@@ -1,6 +1,16 @@
 import bcrypt from "bcrypt";
 
+/**
+ * Único lugar donde se decide cómo se guarda y se compara una contraseña
+ * (bcrypt, costo 10). Sin dependencias de la configuración (env, prisma): lo
+ * usa también el alta del primer admin (npm run admin:crear), que solo lee
+ * DATABASE_URL.
+ */
 export const BCRYPT_COST = 10;
+
+export function hashPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, BCRYPT_COST);
+}
 
 // Hash de una contraseña aleatoria: cuando no hay contra qué comparar (correo
 // que no existe, invitación pendiente) se compara igual contra este hash, para

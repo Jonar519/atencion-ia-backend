@@ -10,3 +10,5 @@ ce27fb0569c5bd31e06104f0652836d4bc3267fc:tests/integration/profile.test.ts:gener
 212d3d8cdcad1f4b964a4ad12e613a4665c22f31:tests/integration/recoveryAndMfa.test.ts:generic-api-key:106
 212d3d8cdcad1f4b964a4ad12e613a4665c22f31:tests/integration/recoveryAndMfa.test.ts:generic-api-key:116
 212d3d8cdcad1f4b964a4ad12e613a4665c22f31:tests/integration/recoveryAndMfa.test.ts:generic-api-key:117
+# Alta del primer admin: contraseña FICTICIA del test (solo en la base de pruebas, revisada a mano).
+0992209186ea93dd0958cb704539cf88175274ae:tests/integration/crearAdmin.test.ts:generic-api-key:63

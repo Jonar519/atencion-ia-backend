@@ -1,5 +1,4 @@
 import { randomBytes } from "crypto";
-import bcrypt from "bcrypt";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { logger } from "../../config/logger";
@@ -7,7 +6,8 @@ import { ApiError } from "../../utils/apiError";
 import { getEmail } from "../../services/email";
 import { templates } from "../../services/email/templates";
 import { getStorage } from "../../services/storage";
-import { BCRYPT_COST, passwordMatches } from "../auth/auth.service";
+import { passwordMatches } from "../auth/auth.service";
+import { hashPassword } from "../auth/passwordCheck";
 import { mfaService } from "../auth/mfa.service";
 import { passwordProblems } from "../auth/passwordPolicy";
 import { sessionsService } from "../auth/sessions.service";
@@ -133,7 +133,7 @@ export const profileService = {
     }
     await prisma.staffUser.update({
       where: { id: staffId },
-      data: { passwordHash: await bcrypt.hash(input.newPassword, BCRYPT_COST) },
+      data: { passwordHash: await hashPassword(input.newPassword) },
     });
     const closed = await sessionsService.revokeOthers(staffId, currentSessionId, "password_changed");
     await getEmail().send(templates.passwordChanged(staff.email, staffId));
