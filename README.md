@@ -85,6 +85,7 @@ Producción local (compilado): `npm run build` y luego `npm start`.
 | `npm run test:mutations`                                                | Rompe a propósito cada regla crítica y exige que los tests fallen             |
 | `npm run voice:demo`                                                    | Llamada de voz de demo por consola contra la API ([guía](docs/demo-fase5.md)) |
 | `npm run voice:purge`                                                   | Purga las transcripciones vencidas (lo mismo que el worker cada hora)         |
+| `npm run admin:crear -- --correo c --nombre "n"`                        | Crea el primer admin (contraseña sin eco, nunca por argumento; idempotente)   |
 | `npm run staff:reset-mfa -- correo`                                     | Quita la MFA de una cuenta (queda en la auditoría y cierra sus sesiones)      |
 | `npm run storage:purge`                                                 | Borra del almacenamiento los archivos en cola de borrado (adjuntos, fotos)    |
 | `npm run loadtest:setup` · `loadtest:messages` · `loadtest:escalations` | Pruebas de carga ([loadtests/README.md](loadtests/README.md))                 |
@@ -311,7 +312,13 @@ docker run --rm -p 4100:4100 --env-file .env.produccion atencion-ia-backend
 - **Las migraciones no corren al arrancar:** van aparte, con `atencion-ia-database`.
 - **Scripts de operación compilados** (la imagen no trae `tsx`): `npm run kb:reindex:start`
   (obligatorio al pasar de `mock` a Voyage: los vectores de un modelo no sirven para otro),
-  `npm run staff:reset-mfa:start -- correo` y `npm run storage:purge:start`.
+  `npm run staff:reset-mfa:start -- correo`, `npm run admin:crear:start -- --correo c --nombre "n"`
+  y `npm run storage:purge:start`.
+- **Primer admin en producción** (el seed no se corre ahí): `npm run admin:crear` desde tu máquina
+  con solo `DATABASE_URL` en la sesión. Pide la contraseña dos veces sin eco (o la primera línea de
+  la entrada con `--stdin`), aplica la misma política y el mismo hash, y deja la cuenta activa y sin
+  MFA (el login le exige enrolarse). Si el correo ya existe o ya hay un admin activo, no cambia nada
+  y sale con 0. Auditado como `staff.first_admin_created`.
 
 ## Tests
 
