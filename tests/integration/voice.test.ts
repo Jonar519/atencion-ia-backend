@@ -732,6 +732,35 @@ describe("desconexiones, cierre del caso y fallas del proveedor", () => {
     expect((await prisma.call.findUniqueOrThrow({ where: { id: callId } })).status).toBe("in_progress");
   });
 
+  it("si el modelo responde con Markdown, el sintetizador y la transcripción reciben texto plano", async () => {
+    const ai = createMockProvider({ latencyMs: 0 });
+    setAiForTests({
+      provider: "mock",
+      classifier: ai.classifier,
+      embedder: ai.embedder,
+      chat: {
+        reply: async (context) => ({ ...(await ai.chat.reply(context)), text: "Atendemos de **lunes a viernes**." }),
+      },
+    });
+    const voice = createMockVoice();
+    const spoken: string[] = [];
+    setVoiceForTests({
+      provider: "mock",
+      stt: voice.stt,
+      tts: {
+        ...voice.tts,
+        synthesize: async (text, options) => (spoken.push(text), voice.tts.synthesize(text, options)),
+      },
+    });
+    const { callId, socket } = await customerInCall();
+    say(socket, "¿Cuál es el horario de atención de las oficinas?");
+    const ttsStart = await socket.waitFor(is("tts.start"));
+    expect(ttsStart.text).toBe("Atendemos de lunes a viernes.");
+    expect(spoken).toEqual(["Atendemos de lunes a viernes."]);
+    const segments = await callsService.segments(callId);
+    expect(segments.find((s) => s.speaker === "ai")?.text).toBe("Atendemos de lunes a viernes.");
+  });
+
   it("si la IA falla en un turno de voz, se escala a un humano (misma regla que el texto)", async () => {
     const mock = createMockProvider({ latencyMs: 0 });
     setAiForTests({
