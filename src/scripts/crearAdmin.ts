@@ -203,7 +203,8 @@ export async function run(argv: string[], io: CliIo, openDb: (url: string) => Pr
   const url = io.env.DATABASE_URL;
   if (!url) {
     io.err(
-      "Falta la variable de entorno DATABASE_URL (la URL pública de la base, p. ej. el DATABASE_PUBLIC_URL de Railway)."
+      "Falta la variable de entorno DATABASE_URL: la URL pública del Postgres (en la plantilla pgvector de " +
+        "Railway, la variable DATABASE_URL del servicio Postgres; no la privada, que solo funciona dentro de Railway)."
     );
     return 1;
   }
