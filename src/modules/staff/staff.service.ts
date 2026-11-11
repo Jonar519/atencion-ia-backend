@@ -1,9 +1,8 @@
 import { randomBytes } from "crypto";
-import bcrypt from "bcrypt";
 import { Prisma, type AgentAvailability } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { ApiError } from "../../utils/apiError";
-import { BCRYPT_COST } from "../auth/auth.service";
+import { hashPassword } from "../auth/passwordCheck";
 import { sessionsService } from "../auth/sessions.service";
 import { lockoutService } from "../auth/lockout.service";
 import { getStorage } from "../../services/storage";
@@ -153,7 +152,7 @@ export const staffService = {
           name: `Agente eliminado ${shortId}`,
           email: `eliminado-${id}@anonimizado.invalid`,
           // Contraseña imposible: nadie la conoce y la cuenta queda inactiva.
-          passwordHash: await bcrypt.hash(randomBytes(32).toString("hex"), BCRYPT_COST),
+          passwordHash: await hashPassword(randomBytes(32).toString("hex")),
           phone: null,
           avatarStorageKey: null,
           mfaSecretEncrypted: null,

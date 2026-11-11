@@ -1,10 +1,10 @@
-import bcrypt from "bcrypt";
 import { prisma } from "../../config/prisma";
 import { logger } from "../../config/logger";
 import { ApiError } from "../../utils/apiError";
 import { getEmail } from "../../services/email";
 import { templates } from "../../services/email/templates";
-import { BCRYPT_COST, normalizeEmail } from "./auth.service";
+import { normalizeEmail } from "./auth.service";
+import { hashPassword } from "./passwordCheck";
 import { lockoutService } from "./lockout.service";
 import { passwordProblems } from "./passwordPolicy";
 import { sessionsService } from "./sessions.service";
@@ -68,7 +68,7 @@ export const passwordService = {
       if (problems.length) throw new ApiError(400, "La contraseña no cumple la política", problems);
       await tx.staffUser.update({
         where: { id: staff.id },
-        data: { passwordHash: await bcrypt.hash(newPassword, BCRYPT_COST) },
+        data: { passwordHash: await hashPassword(newPassword) },
       });
       return staff.id;
     });

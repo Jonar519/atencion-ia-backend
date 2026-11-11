@@ -1,11 +1,10 @@
-import bcrypt from "bcrypt";
 import { Prisma, type StaffRole } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { ApiError } from "../../utils/apiError";
 import { dbNow } from "../../utils/dbTime";
 import { getEmail } from "../../services/email";
 import { templates } from "../../services/email/templates";
-import { BCRYPT_COST } from "../auth/passwordCheck";
+import { hashPassword } from "../auth/passwordCheck";
 import { passwordProblems } from "../auth/passwordPolicy";
 import { consumeToken, findLiveToken, issueToken } from "../auth/singleUseTokens";
 
@@ -124,7 +123,7 @@ export const invitationsService = {
       const updated = await tx.staffUser.updateMany({
         where: { id: staff.id, passwordHash: null },
         data: {
-          passwordHash: await bcrypt.hash(password, BCRYPT_COST),
+          passwordHash: await hashPassword(password),
           isActive: true,
           activatedAt: await dbNow(tx),
         },
