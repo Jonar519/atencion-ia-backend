@@ -114,12 +114,20 @@ export interface VoiceServerOptions {
   audioRealtimeFactor?: number;
   /** Solo tests: duración máxima de la llamada. */
   maxCallSeconds?: number;
+  /**
+   * Tope de close() para esperar el cierre de los sockets y los turnos en curso.
+   * Pasado el tope, se cortan los sockets que queden y se abandonan esos turnos.
+   */
+  closeTimeoutMs?: number;
 }
+
+export const VOICE_CLOSE_TIMEOUT_MS = 3_000;
 
 export async function attachVoice(server: Server, options: VoiceServerOptions = {}): Promise<VoiceServer> {
   const authTimeoutMs = options.authTimeoutMs ?? 5_000;
   const graceMs = options.reconnectGraceMs ?? env.voice.reconnectGraceMs;
   const maxCallSeconds = options.maxCallSeconds ?? env.voice.maxCallSeconds;
+  const closeTimeoutMs = options.closeTimeoutMs ?? VOICE_CLOSE_TIMEOUT_MS;
   const audioBytesPerMs = REALTIME_BYTES_PER_MS * (options.audioRealtimeFactor ?? AUDIO_REALTIME_FACTOR);
   const audioBurstBytes = audioBytesPerMs * AUDIO_BURST_MS;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 });
@@ -651,9 +659,28 @@ export async function attachVoice(server: Server, options: VoiceServerOptions = 
         closing.push(new Promise<void>((resolve) => ws.once("close", () => resolve())));
         ws.close(1001, "Servidor apagándose");
       }
-      await Promise.all(closing);
       // Incluye los sockets que ya se habían cerrado antes de apagar: su último turno sigue en curso.
-      while (endings.size) await Promise.all([...endings]);
+      const drained = (async () => {
+        await Promise.all(closing);
+        while (endings.size) await Promise.all([...endings]);
+      })();
+      // Con tope: un turno colgado (IA o TTS que no responde) no puede frenar el resto del
+      // apagado (auditoría, colas, Redis, PostgreSQL) hasta que se fuerce la salida.
+      let timer: NodeJS.Timeout | undefined;
+      const timedOut = await Promise.race([
+        drained.then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), closeTimeoutMs);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (timedOut) {
+        logger.warn(
+          { closeTimeoutMs, pendingTurns: endings.size, openSockets: sockets.size },
+          "El cierre de la voz superó su tope; se abandonan los turnos pendientes"
+        );
+        for (const ws of sockets.keys()) ws.terminate();
+      }
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
   };

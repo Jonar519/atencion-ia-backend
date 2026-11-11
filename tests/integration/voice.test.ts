@@ -675,6 +675,47 @@ describe("abuso del canal de voz y límites", () => {
     expect(segments.map((s) => s.speaker)).toEqual(["customer", "ai"]);
   });
 
+  it("si un turno se cuelga (el TTS nunca responde), apagar el servidor no espera más que su tope", async () => {
+    const mock = createMockVoice();
+    let ttsCalled!: () => void;
+    const ttsStarted = new Promise<void>((resolve) => (ttsCalled = resolve));
+    setVoiceForTests({
+      provider: "mock",
+      stt: mock.stt,
+      // Nunca se resuelve: el turno queda colgado para siempre (y no toca nada más después).
+      tts: { ...mock.tts, synthesize: () => (ttsCalled(), new Promise(() => undefined)) },
+    });
+    const own = http.createServer(app);
+    await new Promise<void>((resolve) => own.listen(0, resolve));
+    const closeTimeoutMs = 300;
+    const ownVoice = await attachVoice(own, { authTimeoutMs: 300, audioRealtimeFactor: 1_000, closeTimeoutMs });
+    try {
+      const { token } = await widgetSession();
+      const callId = await startCall(token, await widgetConversation(token));
+      const ws = new WebSocket(`ws://127.0.0.1:${(own.address() as AddressInfo).port}/ws/voice`, {
+        headers: { Origin: ORIGIN },
+      });
+      const closed = new Promise<number>((resolve) => ws.on("close", (code) => resolve(code)));
+      const ready = new Promise<void>((resolve) =>
+        ws.on("message", (raw, isBinary) => !isBinary && JSON.parse(raw.toString()).type === "ready" && resolve())
+      );
+      await new Promise((resolve) => ws.once("open", resolve));
+      ws.send(JSON.stringify({ type: "auth", callId, widgetToken: token }));
+      await ready;
+      for (const frame of encodeMockSpeech("¿Cuál es el horario de atención de las oficinas?")) ws.send(frame);
+      await ttsStarted;
+
+      const started = Date.now();
+      await ownVoice.close();
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeGreaterThanOrEqual(closeTimeoutMs - 20); // sí esperó al turno…
+      expect(elapsed).toBeLessThan(closeTimeoutMs + 1_500); // …pero no para siempre
+      expect(await closed).toBe(1001); // el cliente igual recibió el cierre ordenado
+    } finally {
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
+  });
+
   it("audio con formato inválido (largo impar) se rechaza (4400)", async () => {
     const { socket } = await customerInCall();
     socket.ws.send(Buffer.alloc(33));
