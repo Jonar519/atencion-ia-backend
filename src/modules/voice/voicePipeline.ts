@@ -1,6 +1,7 @@
 import { logger } from "../../config/logger";
 import { handleCustomerTurn } from "../engine/conversationEngine";
 import { getVoice, SAMPLE_RATE } from "../../services/voice";
+import { stripMarkdownEmphasis } from "../../services/ai/plainText";
 import { voiceTurnLatency } from "../../observability/metrics";
 import { callsService } from "./calls.service";
 import { recordTtsUsage } from "./voiceBudget";
@@ -55,11 +56,15 @@ export async function processCustomerSegment(
 
   if (result.reply) {
     const reply = result.reply;
+    // Lo que se dice y se muestra en la llamada, SIEMPRE sin marcadores de Markdown: el
+    // sintetizador leería los asteriscos en voz alta. El motor ya limpia la respuesta de la
+    // IA; esto cubre también cualquier otro texto que llegue aquí (y es idempotente).
+    const spoken = stripMarkdownEmphasis(reply.content);
     const voice = getVoice();
     const replyStartMs = ctx.offsetMs + segment.endMs + (Date.now() - heardAt);
     let speech: Awaited<ReturnType<typeof voice.tts.synthesize>> | null = null;
     try {
-      speech = await voice.tts.synthesize(reply.content, { sampleRate: SAMPLE_RATE });
+      speech = await voice.tts.synthesize(spoken, { sampleRate: SAMPLE_RATE });
     } catch (err) {
       // Sin audio, la respuesta igual quedó en la conversación: el cliente la ve como texto.
       logger.warn({ err: err instanceof Error ? err.name : String(err) }, "No se pudo sintetizar la respuesta");
@@ -69,20 +74,20 @@ export async function processCustomerSegment(
     await callsService.appendSegment({
       callId: ctx.callId,
       speaker: "ai",
-      text: reply.content,
+      text: spoken,
       startMs: replyStartMs,
       endMs: replyStartMs + (speech?.durationMs ?? 0),
       confidence: null,
       messageId: reply.id,
     });
     if (!speech) {
-      out.json({ type: "tts.unavailable", messageId: reply.id, text: reply.content });
+      out.json({ type: "tts.unavailable", messageId: reply.id, text: spoken });
     } else {
       voiceTurnLatency.observe((Date.now() - heardAt) / 1000);
       out.json({
         type: "tts.start",
         messageId: reply.id,
-        text: reply.content,
+        text: spoken,
         sampleRate: speech.sampleRate,
         durationMs: speech.durationMs,
       });

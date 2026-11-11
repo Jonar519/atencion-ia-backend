@@ -38,6 +38,27 @@ async function newChat() {
 }
 
 describe("turno normal: RAG + respuesta", () => {
+  it("si el modelo responde con Markdown, el cliente recibe y se guarda texto plano (sin asteriscos)", async () => {
+    const mock = createMockProvider({ latencyMs: 0 });
+    setAiForTests({
+      provider: "mock",
+      classifier: mock.classifier,
+      embedder: mock.embedder,
+      chat: {
+        reply: async (context) => ({
+          ...(await mock.chat.reply(context)),
+          text: "Abrimos los **sábados** *de 9 a 12*.",
+        }),
+      },
+    });
+    const chat = await newChat();
+    const res = await sendCustomerMessage(chat.token, chat.conversationId, "¿A qué hora abren las oficinas el sábado?");
+    expect(res.status).toBe(201);
+    expect(res.body.reply).toMatchObject({ sender: "ai", content: "Abrimos los sábados de 9 a 12." });
+    const stored = await prisma.message.findUniqueOrThrow({ where: { id: res.body.reply.id } });
+    expect(stored.content).toBe("Abrimos los sábados de 9 a 12.");
+  });
+
   it("responde con información de la KB y guarda cita, intención y consumo", async () => {
     const chat = await newChat();
     const res = await sendCustomerMessage(chat.token, chat.conversationId, "¿A qué hora abren las oficinas el sábado?");

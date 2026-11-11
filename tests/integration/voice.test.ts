@@ -546,6 +546,8 @@ describe("aislamiento entre llamadas y participantes", () => {
     await settle();
     // El caso está con la IA (no en cola): un agente cualquiera no lo ve.
     expect(outsiderEvents.messages.some((m) => m.callId === callId)).toBe(false);
+    // El turno termina AQUÍ (respuesta y audio), no durante el test siguiente con sus mocks.
+    await socket.waitFor(is("tts.end"));
     for (const s of [outsiderEvents, adminEvents]) s.ws.close();
   });
 
@@ -643,6 +645,79 @@ describe("abuso del canal de voz y límites", () => {
     }
   });
 
+  it("apagar el servidor espera el último turno de una conexión ya cerrada (nada queda corriendo después)", async () => {
+    const own = http.createServer(app);
+    await new Promise<void>((resolve) => own.listen(0, resolve));
+    const ownVoice = await attachVoice(own, { authTimeoutMs: 300, audioRealtimeFactor: 1_000 });
+    let callId: string;
+    try {
+      const { token } = await widgetSession();
+      callId = await startCall(token, await widgetConversation(token));
+      const ws = new WebSocket(`ws://127.0.0.1:${(own.address() as AddressInfo).port}/ws/voice`, {
+        headers: { Origin: ORIGIN },
+      });
+      const closed = new Promise<void>((resolve) => ws.on("close", () => resolve()));
+      const ready = new Promise<void>((resolve) =>
+        ws.on("message", (raw, isBinary) => !isBinary && JSON.parse(raw.toString()).type === "ready" && resolve())
+      );
+      await new Promise((resolve) => ws.once("open", resolve));
+      ws.send(JSON.stringify({ type: "auth", callId, widgetToken: token }));
+      await ready;
+      // Habla real SIN el silencio que cierra la frase: el STT la entrega recién al cerrar el socket.
+      for (let i = 0; i < 5; i += 1) ws.send(tone(100, 300));
+      await settle(50);
+      ws.close();
+      await closed;
+    } finally {
+      await ownVoice.close();
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
+    // Sin esperar nada más: si close() volvió antes de que el turno terminara, aquí falta la respuesta.
+    const segments = await callsService.segments(callId);
+    expect(segments.map((s) => s.speaker)).toEqual(["customer", "ai"]);
+  });
+
+  it("si un turno se cuelga (el TTS nunca responde), apagar el servidor no espera más que su tope", async () => {
+    const mock = createMockVoice();
+    let ttsCalled!: () => void;
+    const ttsStarted = new Promise<void>((resolve) => (ttsCalled = resolve));
+    setVoiceForTests({
+      provider: "mock",
+      stt: mock.stt,
+      // Nunca se resuelve: el turno queda colgado para siempre (y no toca nada más después).
+      tts: { ...mock.tts, synthesize: () => (ttsCalled(), new Promise(() => undefined)) },
+    });
+    const own = http.createServer(app);
+    await new Promise<void>((resolve) => own.listen(0, resolve));
+    const closeTimeoutMs = 300;
+    const ownVoice = await attachVoice(own, { authTimeoutMs: 300, audioRealtimeFactor: 1_000, closeTimeoutMs });
+    try {
+      const { token } = await widgetSession();
+      const callId = await startCall(token, await widgetConversation(token));
+      const ws = new WebSocket(`ws://127.0.0.1:${(own.address() as AddressInfo).port}/ws/voice`, {
+        headers: { Origin: ORIGIN },
+      });
+      const closed = new Promise<number>((resolve) => ws.on("close", (code) => resolve(code)));
+      const ready = new Promise<void>((resolve) =>
+        ws.on("message", (raw, isBinary) => !isBinary && JSON.parse(raw.toString()).type === "ready" && resolve())
+      );
+      await new Promise((resolve) => ws.once("open", resolve));
+      ws.send(JSON.stringify({ type: "auth", callId, widgetToken: token }));
+      await ready;
+      for (const frame of encodeMockSpeech("¿Cuál es el horario de atención de las oficinas?")) ws.send(frame);
+      await ttsStarted;
+
+      const started = Date.now();
+      await ownVoice.close();
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeGreaterThanOrEqual(closeTimeoutMs - 20); // sí esperó al turno…
+      expect(elapsed).toBeLessThan(closeTimeoutMs + 1_500); // …pero no para siempre
+      expect(await closed).toBe(1001); // el cliente igual recibió el cierre ordenado
+    } finally {
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
+  });
+
   it("audio con formato inválido (largo impar) se rechaza (4400)", async () => {
     const { socket } = await customerInCall();
     socket.ws.send(Buffer.alloc(33));
@@ -730,6 +805,35 @@ describe("desconexiones, cierre del caso y fallas del proveedor", () => {
     const segments = await callsService.segments(callId);
     expect(segments.map((s) => s.speaker)).toEqual(["customer", "ai"]);
     expect((await prisma.call.findUniqueOrThrow({ where: { id: callId } })).status).toBe("in_progress");
+  });
+
+  it("si el modelo responde con Markdown, el sintetizador y la transcripción reciben texto plano", async () => {
+    const ai = createMockProvider({ latencyMs: 0 });
+    setAiForTests({
+      provider: "mock",
+      classifier: ai.classifier,
+      embedder: ai.embedder,
+      chat: {
+        reply: async (context) => ({ ...(await ai.chat.reply(context)), text: "Atendemos de **lunes a viernes**." }),
+      },
+    });
+    const voice = createMockVoice();
+    const spoken: string[] = [];
+    setVoiceForTests({
+      provider: "mock",
+      stt: voice.stt,
+      tts: {
+        ...voice.tts,
+        synthesize: async (text, options) => (spoken.push(text), voice.tts.synthesize(text, options)),
+      },
+    });
+    const { callId, socket } = await customerInCall();
+    say(socket, "¿Cuál es el horario de atención de las oficinas?");
+    const ttsStart = await socket.waitFor(is("tts.start"));
+    expect(ttsStart.text).toBe("Atendemos de lunes a viernes.");
+    expect(spoken).toEqual(["Atendemos de lunes a viernes."]);
+    const segments = await callsService.segments(callId);
+    expect(segments.find((s) => s.speaker === "ai")?.text).toBe("Atendemos de lunes a viernes.");
   });
 
   it("si la IA falla en un turno de voz, se escala a un humano (misma regla que el texto)", async () => {

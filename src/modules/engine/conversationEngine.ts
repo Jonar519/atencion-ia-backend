@@ -3,6 +3,7 @@ import { prisma } from "../../config/prisma";
 import { logger } from "../../config/logger";
 import { engineTurns } from "../../observability/metrics";
 import { AiRefusalError, getAi, type Classification, type KbContextChunk } from "../../services/ai";
+import { stripMarkdownEmphasis } from "../../services/ai/plainText";
 import { ApiError } from "../../utils/apiError";
 import { retrieveKnowledge } from "../rag/rag.service";
 import { assertWithinBudget, usageRows, type UsageRecord } from "./budget.service";
@@ -240,7 +241,8 @@ export async function handleCustomerTurn(input: CustomerTurnInput): Promise<Turn
       const reply = await ai.chat.reply({ history: history.turns, kbChunks, customerMessage: aiText });
       replyLatencyMs = Date.now() - started;
       usage.push({ kind: "chat", model: reply.model, usage: reply.usage });
-      replyText = reply.text;
+      // Defensa: el cliente ve texto plano y en una llamada se lee en voz alta (ver plainText.ts).
+      replyText = stripMarkdownEmphasis(reply.text);
       replyModel = reply.model;
     } catch (err) {
       aiFailure = err instanceof AiRefusalError ? "refusal" : "unavailable";

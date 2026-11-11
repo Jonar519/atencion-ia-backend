@@ -8,7 +8,7 @@ import { flushAudit } from "./services/audit/audit.service";
 import { closeHttpServer, createGracefulShutdown } from "./lifecycle/shutdown";
 import { closeQueues } from "./queues/queues";
 import { attachRealtime } from "./realtime/wsServer";
-import { attachVoice } from "./realtime/voiceServer";
+import { attachVoice, VOICE_CLOSE_TIMEOUT_MS } from "./realtime/voiceServer";
 
 async function main() {
   await prisma.$connect();
@@ -21,7 +21,15 @@ async function main() {
   // WebSocket de tiempo real en el mismo puerto (ruta /ws).
   const realtime = await attachRealtime(server);
   // WebSocket de voz (audio + señalización WebRTC) en /ws/voice.
-  const voice = await attachVoice(server);
+  // Su cierre espera los turnos en curso, con tope: como mucho la mitad de lo que queda del
+  // apagado tras el drenaje (en producción, (10 s - 5 s) / 2 = 2,5 s), para que los pasos
+  // siguientes (HTTP, auditoría, Redis, PostgreSQL) quepan antes de que se fuerce la salida.
+  const voice = await attachVoice(server, {
+    closeTimeoutMs: Math.max(
+      0,
+      Math.min(VOICE_CLOSE_TIMEOUT_MS, Math.floor((env.shutdownTimeoutMs - env.shutdownDrainDelayMs) / 2))
+    ),
+  });
 
   /**
    * Apagado ordenado (SIGTERM del orquestador, o Ctrl+C = SIGINT en la consola):

@@ -114,16 +114,30 @@ export interface VoiceServerOptions {
   audioRealtimeFactor?: number;
   /** Solo tests: duración máxima de la llamada. */
   maxCallSeconds?: number;
+  /**
+   * Tope de close() para esperar el cierre de los sockets y los turnos en curso.
+   * Pasado el tope, se cortan los sockets que queden y se abandonan esos turnos.
+   */
+  closeTimeoutMs?: number;
 }
+
+export const VOICE_CLOSE_TIMEOUT_MS = 3_000;
 
 export async function attachVoice(server: Server, options: VoiceServerOptions = {}): Promise<VoiceServer> {
   const authTimeoutMs = options.authTimeoutMs ?? 5_000;
   const graceMs = options.reconnectGraceMs ?? env.voice.reconnectGraceMs;
   const maxCallSeconds = options.maxCallSeconds ?? env.voice.maxCallSeconds;
+  const closeTimeoutMs = options.closeTimeoutMs ?? VOICE_CLOSE_TIMEOUT_MS;
   const audioBytesPerMs = REALTIME_BYTES_PER_MS * (options.audioRealtimeFactor ?? AUDIO_REALTIME_FACTOR);
   const audioBurstBytes = audioBytesPerMs * AUDIO_BURST_MS;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 });
   const sockets = new Map<WebSocket, PendingSocket>();
+  /**
+   * Cierres de conexión en curso. Al cerrarse un socket, el STT entrega lo último
+   * que se dijo y ese turno (IA, TTS, transcripción) todavía corre: close() lo
+   * espera, para que nada siga usando la base o los proveedores después de apagar.
+   */
+  const endings = new Set<Promise<void>>();
   const upgradeCookies = new WeakMap<WebSocket, string | undefined>();
   /** Esperas de reconexión por llamada y rol (clave `${callId}:${role}`). */
   const graceTimers = new Map<string, NodeJS.Timeout>();
@@ -543,7 +557,11 @@ export async function attachVoice(server: Server, options: VoiceServerOptions = 
     ws.on("close", () => {
       clearTimeout(authState.timer);
       sockets.delete(ws);
-      void endConnection(state);
+      const ending = endConnection(state).catch((err: unknown) => {
+        logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Error cerrando una conexión de voz");
+      });
+      endings.add(ending);
+      void ending.finally(() => endings.delete(ending));
     });
   });
 
@@ -635,9 +653,33 @@ export async function attachVoice(server: Server, options: VoiceServerOptions = 
       for (const timer of [...graceTimers.values(), ...maxDurationTimers.values()]) clearTimeout(timer);
       await unsubscribeVoice();
       await unsubscribeRealtime();
+      const closing: Promise<void>[] = [];
       for (const [ws, state] of sockets) {
         if (state.connection) state.connection.noGrace = true;
+        closing.push(new Promise<void>((resolve) => ws.once("close", () => resolve())));
         ws.close(1001, "Servidor apagándose");
+      }
+      // Incluye los sockets que ya se habían cerrado antes de apagar: su último turno sigue en curso.
+      const drained = (async () => {
+        await Promise.all(closing);
+        while (endings.size) await Promise.all([...endings]);
+      })();
+      // Con tope: un turno colgado (IA o TTS que no responde) no puede frenar el resto del
+      // apagado (auditoría, colas, Redis, PostgreSQL) hasta que se fuerce la salida.
+      let timer: NodeJS.Timeout | undefined;
+      const timedOut = await Promise.race([
+        drained.then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), closeTimeoutMs);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (timedOut) {
+        logger.warn(
+          { closeTimeoutMs, pendingTurns: endings.size, openSockets: sockets.size },
+          "El cierre de la voz superó su tope; se abandonan los turnos pendientes"
+        );
+        for (const ws of sockets.keys()) ws.terminate();
       }
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
