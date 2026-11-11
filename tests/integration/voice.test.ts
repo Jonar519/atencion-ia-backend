@@ -546,6 +546,8 @@ describe("aislamiento entre llamadas y participantes", () => {
     await settle();
     // El caso está con la IA (no en cola): un agente cualquiera no lo ve.
     expect(outsiderEvents.messages.some((m) => m.callId === callId)).toBe(false);
+    // El turno termina AQUÍ (respuesta y audio), no durante el test siguiente con sus mocks.
+    await socket.waitFor(is("tts.end"));
     for (const s of [outsiderEvents, adminEvents]) s.ws.close();
   });
 
