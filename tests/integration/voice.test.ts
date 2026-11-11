@@ -643,6 +643,38 @@ describe("abuso del canal de voz y límites", () => {
     }
   });
 
+  it("apagar el servidor espera el último turno de una conexión ya cerrada (nada queda corriendo después)", async () => {
+    const own = http.createServer(app);
+    await new Promise<void>((resolve) => own.listen(0, resolve));
+    const ownVoice = await attachVoice(own, { authTimeoutMs: 300, audioRealtimeFactor: 1_000 });
+    let callId: string;
+    try {
+      const { token } = await widgetSession();
+      callId = await startCall(token, await widgetConversation(token));
+      const ws = new WebSocket(`ws://127.0.0.1:${(own.address() as AddressInfo).port}/ws/voice`, {
+        headers: { Origin: ORIGIN },
+      });
+      const closed = new Promise<void>((resolve) => ws.on("close", () => resolve()));
+      const ready = new Promise<void>((resolve) =>
+        ws.on("message", (raw, isBinary) => !isBinary && JSON.parse(raw.toString()).type === "ready" && resolve())
+      );
+      await new Promise((resolve) => ws.once("open", resolve));
+      ws.send(JSON.stringify({ type: "auth", callId, widgetToken: token }));
+      await ready;
+      // Habla real SIN el silencio que cierra la frase: el STT la entrega recién al cerrar el socket.
+      for (let i = 0; i < 5; i += 1) ws.send(tone(100, 300));
+      await settle(50);
+      ws.close();
+      await closed;
+    } finally {
+      await ownVoice.close();
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
+    // Sin esperar nada más: si close() volvió antes de que el turno terminara, aquí falta la respuesta.
+    const segments = await callsService.segments(callId);
+    expect(segments.map((s) => s.speaker)).toEqual(["customer", "ai"]);
+  });
+
   it("audio con formato inválido (largo impar) se rechaza (4400)", async () => {
     const { socket } = await customerInCall();
     socket.ws.send(Buffer.alloc(33));
