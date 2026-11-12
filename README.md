@@ -18,6 +18,8 @@ explican su parte y enlazan aquí:
 1. [Qué es el proyecto](#1-qué-es-el-proyecto)
 2. [Cómo funciona](#2-cómo-funciona)
 3. [Tecnologías](#3-tecnologías)
+4. [Qué necesita el profesor](#4-qué-necesita-el-profesor)
+5. [Acceso y roles](#5-acceso-y-roles)
 
 ## 1. Qué es el proyecto
 
@@ -179,3 +181,190 @@ el `docker-compose.yml` de `atencion-ia-database`.
 | **GitHub Actions** · **gitleaks**                     | gitleaks `v8.21.2`                        | CI en cada push: lint, tipos, tests (también en orden aleatorio), build, mutaciones, `npm audit` y búsqueda de secretos | Nada llega a `main` sin pasar las pruebas, y ningún secreto entra al historial.                                                   |
 | **Docker**                                            | imagen `node:24-bookworm-slim`            | Una imagen para la API y el worker; Postgres y Redis en desarrollo                                                      | El mismo artefacto en local y en Railway, sin usuario root.                                                                       |
 | **Railway** · **Vercel** · **Cloudflare**             | —                                         | API, worker, PostgreSQL y Redis en Railway; frontend en Vercel; DNS y R2 en Cloudflare                                  | Despliegue al hacer `push` a `main`, HTTPS automático y dominios propios.                                                         |
+
+## 4. Qué necesita el profesor
+
+### a) Opción recomendada: solo el navegador
+
+- Un navegador actualizado: **Chrome, Edge o Firefox** de escritorio, con acceso a internet.
+- La URL: <https://atencion.jonarproyectos.com>. No hay que instalar nada.
+- **Para las llamadas de voz:** micrófono y altavoces (o audífonos con micrófono). El navegador pide
+  permiso para usar el micrófono la primera vez que pulsas **Llamar**: elige **Permitir**. Si lo
+  negaste, se reactiva en el candado de la barra de direcciones → **Micrófono → Permitir** y se
+  recarga la página.
+- **Para entrar como administrador:** una aplicación de códigos en el teléfono (Google
+  Authenticator, Microsoft Authenticator o similar). La verificación en dos pasos es obligatoria para
+  ese rol (ver [Acceso y roles](#5-acceso-y-roles)).
+- **Para probar el tiempo real:** dos ventanas del navegador lado a lado, una como cliente y otra
+  como asesor. Para probar el rol de asesor y el de administrador a la vez, usa una ventana normal y
+  otra de incógnito (cada una guarda su propia sesión).
+- Para los adjuntos: un PDF y una foto (JPEG, PNG o WebP) de menos de 5 MB.
+
+Comprobación rápida de que todo está en línea: abre
+<https://api-atencion.jonarproyectos.com/ready>. Debe mostrar
+`{"status":"ready","checks":{"database":"ok","redis":"ok"}}`.
+
+### b) Opción local (opcional)
+
+Levanta todo en tu equipo con la IA, la voz, el correo y los archivos **simulados**: no hace falta
+ninguna clave de servicios externos. Los comandos se probaron en Windows 11 con `cmd.exe`.
+
+**Requisitos**
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) en ejecución (PostgreSQL y Redis
+  corren en contenedores).
+- [Node.js](https://nodejs.org/) **20 o superior** (la CI usa 24) con npm.
+- [Git](https://git-scm.com/).
+- Puertos libres: 5434 (PostgreSQL), 6380 (Redis), 4100 (API), 9465 (worker) y 5174 (frontend).
+- En Linux o macOS, además, el cliente `psql` de PostgreSQL (los scripts `.sh` lo usan).
+
+**1. Descarga los tres repositorios en la misma carpeta** (los tests y los scripts esperan que sean
+carpetas hermanas):
+
+```bat
+mkdir atencion-ia
+cd atencion-ia
+git clone https://github.com/Jonar519/atencion-ia-database.git
+git clone https://github.com/Jonar519/atencion-ia-backend.git
+git clone https://github.com/Jonar519/atencion-ia-frontend.git
+```
+
+**2. Base de datos y Redis** (crea las tablas y carga los datos de prueba):
+
+```bat
+cd atencion-ia-database
+docker compose up -d
+scripts\migrate.bat
+scripts\seed.bat
+cd ..
+```
+
+En Linux o macOS:
+
+```bash
+cd atencion-ia-database
+docker compose up -d
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5434/atencion_ia"
+./scripts/migrate.sh
+./scripts/seed.sh
+cd ..
+```
+
+Esperado: `Listo: N migracion(es) nueva(s) aplicada(s).` y `Datos de prueba cargados correctamente.`
+(si los repites, la migración dice `0 migracion(es)` y el seed no duplica nada).
+
+**3. Backend** (API y worker):
+
+```bat
+cd atencion-ia-backend
+npm install
+npx prisma generate
+copy .env.example .env
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+Abre `.env` y reemplaza `JWT_SECRET` por el valor que imprimió el último comando. Vuelve a ejecutar
+ese comando y pon el segundo valor (distinto) en `IP_HASH_SECRET`. El resto de `.env.example` ya
+trae valores de desarrollo, por ejemplo:
+
+```ini
+DATABASE_URL=postgresql://postgres:postgres@localhost:5434/atencion_ia
+REDIS_URL=redis://localhost:6380
+PORT=4100
+CORS_ORIGIN=http://localhost:5174
+AI_PROVIDER=mock
+VOICE_PROVIDER=mock
+EMAIL_PROVIDER=mock
+STORAGE_PROVIDER=local
+```
+
+Indexa la base de conocimiento de prueba (una vez) y arranca la API y el worker, **cada uno en su
+propia ventana** de `cmd`:
+
+```bat
+npm run kb:reindex
+npm run dev
+```
+
+```bat
+cd atencion-ia\atencion-ia-backend
+npm run worker
+```
+
+Esperado: `API escuchando en http://localhost:4100`, `WebSocket de voz en /ws/voice (proveedor: mock)`
+y, en la otra ventana, `Worker iniciado`.
+
+**4. Frontend** (en una tercera ventana):
+
+```bat
+cd atencion-ia\atencion-ia-frontend
+npm install
+npm run dev
+```
+
+Esperado: `Local: http://localhost:5174/`. La app usa por defecto la API en `http://localhost:4100`
+(`VITE_API_URL` en `.env.example` del frontend; solo hace falta cambiarlo si usas otro puerto).
+
+**5. Comprueba que funciona**
+
+1. <http://localhost:4100/ready> → `{"status":"ready","checks":{"database":"ok","redis":"ok"}}`.
+2. <http://localhost:5174> → la portada de Banco Cordillera.
+3. Entra al panel con una cuenta de prueba del seed (por ejemplo `laura@cordillera.example`; las
+   cuentas y su contraseña de prueba están en el
+   [README de atencion-ia-database](https://github.com/Jonar519/atencion-ia-database#datos-de-prueba-seed)).
+4. Sigue la [guía de pruebas](#6-guía-de-pruebas-función-por-función). Diferencias en local: la IA
+   simulada responde con reglas fijas, los correos no se envían (se guardan en la tabla
+   `email_outbox`, ver [Solución de problemas](#9-solución-de-problemas)) y el reconocimiento de voz
+   simulado no entiende lo que dices: reconoce frases de un guion de prueba.
+
+Para detener todo: **Ctrl+C** en cada ventana y `docker compose stop` en `atencion-ia-database`.
+
+## 5. Acceso y roles
+
+### Roles
+
+| Quién             | Cómo entra                                                            | Qué puede hacer                                                                                                                                                                                                                                            |
+| ----------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cliente**       | Sin cuenta: **Soy cliente → Iniciar chat** (nombre opcional)          | Chatear con la IA, llamar por voz, adjuntar archivos, ver solo **sus** conversaciones (máximo 3 abiertas a la vez).                                                                                                                                        |
+| **Asesor**        | **Entrar al panel de asesores** con correo y contraseña               | Ver la cola y leer un caso antes de tomarlo, tomar, responder, adjuntar, usar respuestas predefinidas, cerrar, unirse a llamadas, cambiar su disponibilidad y gestionar su perfil. No ve los casos de otros asesores ni los que atiende la IA sin escalar. |
+| **Administrador** | Igual que el asesor, más la **verificación en dos pasos obligatoria** | Todo lo del asesor, más: base de conocimiento, respuestas predefinidas, equipo (invitar, reenviar o cancelar invitaciones, reasignar casos, exportar datos y eliminar la cuenta de un asesor) y analítica.                                                 |
+
+La interfaz oculta lo que tu rol no puede hacer, pero quien decide es siempre la API: si alguien
+intenta entrar a una ruta de administrador con una cuenta de asesor, la pantalla lo devuelve al panel
+y la API responde 403.
+
+### Credenciales
+
+Las credenciales **no** están en este README. El estudiante las entrega por un canal privado, o
+envía una **invitación por correo** a la dirección del profesor:
+
+<!-- ACCESO: lo completa el estudiante -->
+
+- **Invitación por correo:** llega desde `no-responder@jonarproyectos.com` con un enlace a
+  **Completa tu cuenta**, donde eliges tu propia contraseña (mínimo 12 caracteres, sin tu nombre ni
+  tu correo). El enlace **vence a las 72 horas** y sirve una sola vez.
+- **Si la invitación venció o no funciona:** la pantalla dice **Invitación no válida** (el mismo
+  mensaje para un enlace vencido, usado, cancelado o mal copiado). Pide al estudiante que pulse
+  **Reenviar** en **Equipo**: llega un enlace nuevo con otras 72 horas y el anterior deja de servir.
+- **Si no llega el correo:** revisa la carpeta de spam. El servicio de correo está en modo de
+  pruebas y solo entrega a direcciones verificadas por el estudiante (ver
+  [Limitaciones](#8-limitaciones-conocidas-y-decisiones-de-diseño)); confírmale qué dirección usas.
+
+### Verificación en dos pasos (MFA)
+
+- **Administrador: obligatoria.** La primera vez que entras (o al completar una invitación de
+  administrador) aparece **Activa la verificación en dos pasos** con un código QR. Escanéalo con la
+  aplicación de códigos, escribe los 6 dígitos → **Activar y entrar**, guarda los **10 códigos de
+  respaldo**, marca **Ya guardé mis códigos** → **Continuar**. Desde entonces, después de la
+  contraseña se pide el código de la aplicación (o uno de respaldo, que sirve una sola vez).
+- **Asesor: opcional.** Se activa en **Mi perfil → Verificación en dos pasos → Activar**.
+
+### Si algo del acceso falla
+
+| Situación                                      | Qué hacer                                                                                                                                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Olvidaste la contraseña                        | En el inicio de sesión, **¿Olvidaste tu contraseña?** → escribe tu correo → **Enviar enlace**. El enlace vence en 15 minutos y sirve una vez.                       |
+| "Credenciales inválidas"                       | Revisa mayúsculas y espacios. Tras 5 intentos fallidos, la cuenta se bloquea unos minutos (1, 2, 4… hasta 60): espera y vuelve a intentar.                          |
+| "El código no es correcto"                     | Revisa que la hora del teléfono sea automática. Cinco códigos errados seguidos obligan a volver a escribir la contraseña. Puedes usar un código de respaldo.        |
+| Perdiste el teléfono y los códigos de respaldo | No hay botón para eso, a propósito. El estudiante quita la verificación de tu cuenta con un comando del servidor y, al entrar, la activas de nuevo.                 |
+| La sesión se cerró sola                        | El acceso dura 15 minutos y se renueva solo mientras usas la app; si pasas 7 días sin usarla, o si alguien cerró tus sesiones desde **Mi perfil**, vuelve a entrar. |
