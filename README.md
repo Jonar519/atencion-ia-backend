@@ -316,8 +316,8 @@ Esperado: `Local: http://localhost:5174/`. La app usa por defecto la API en `htt
 1. <http://localhost:4100/ready> → `{"status":"ready","checks":{"database":"ok","redis":"ok"}}`.
 2. <http://localhost:5174> → la portada de Banco Cordillera.
 3. Entra al panel con una cuenta de prueba del seed (por ejemplo `laura@cordillera.example`; las
-   cuentas y su contraseña de prueba están en el
-   [README de atencion-ia-database](https://github.com/Jonar519/atencion-ia-database#datos-de-prueba-seed)).
+   cuentas y su contraseña de prueba están en la
+   [referencia técnica de atencion-ia-database](https://github.com/Jonar519/atencion-ia-database/blob/main/docs/referencia-tecnica.md#datos-de-prueba-seed); solo existen en local).
 4. Sigue la [guía de pruebas](#6-guía-de-pruebas-función-por-función). Diferencias en local: la IA
    simulada responde con reglas fijas, los correos no se envían (se guardan en la tabla
    `email_outbox`, ver [Solución de problemas](#9-solución-de-problemas)) y el reconocimiento de voz
