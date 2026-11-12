@@ -1,398 +1,652 @@
-# atencion-ia-backend
+# Atención IA: atención al cliente con inteligencia artificial
 
-API REST, WebSocket (mensajería en tiempo real y señalización WebRTC) y workers de IA de
-**Atención al cliente omnicanal con IA**: un cliente escribe o llama desde el navegador,
-una IA con RAG sobre la base de conocimiento de la empresa responde, y cuando no puede
-resolver (fraude, cliente molesto, pide un humano…) la conversación se escala a un agente.
+**Producción:** aplicación en <https://atencion.jonarproyectos.com> · API en
+`api-atencion.jonarproyectos.com` (estado: [`/ready`](https://api-atencion.jonarproyectos.com/ready)).
 
-## Estado por fase
+Este README es la guía para evaluar el proyecto completo sin ayuda. El proyecto vive en tres
+repositorios; este (`atencion-ia-backend`) es el principal y tiene la guía de pruebas. Los otros dos
+explican su parte y enlazan aquí:
 
-| Fase  | Contenido                                                                                                                       | Estado |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| 2     | Identidad del staff, autorización por rol y por dueño, base de conocimiento, conversaciones, observabilidad                     | ✅     |
-| 3     | IA: proveedor intercambiable (`AI_PROVIDER=mock` por defecto), RAG, intención/sentimiento, escalamiento                         | ✅     |
-| 4     | WebSocket de tiempo real (solo recepción), sesión del widget en cookie httpOnly, frontend                                       | ✅     |
-| 5     | Voz: señalización WebRTC, STT/TTS (`VOICE_PROVIDER=mock`), mismo motor, retención                                               | ✅     |
-| 6     | Pruebas de carga (con mejora medida), modelo de amenazas STRIDE, GitHub Actions                                                 | ✅     |
-| 7     | Identidad profesional (recuperar contraseña, MFA, sesiones, perfil), roles y administración, adjuntos                           | ✅     |
-| 7 (F) | Alta de asesores SOLO por invitación (sin registro público ni contraseñas elegidas por un admin); sin preferencia de tema (019) | ✅     |
+| Repositorio            | Qué contiene                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `atencion-ia-backend`  | **Este.** API REST, WebSockets de chat y de voz, worker de colas, IA, voz, correo y archivos. |
+| `atencion-ia-frontend` | La aplicación web: widget del cliente, panel de asesores y administración.                    |
+| `atencion-ia-database` | El esquema de PostgreSQL (migraciones SQL), los datos de prueba y las pruebas del esquema.    |
 
-## Stack
+## Contenido
 
-Node.js 20+ · TypeScript · Express 4 · Prisma 6 (solo como cliente) · PostgreSQL 16 +
-pgvector · Redis 7 (rate limiting, colas BullMQ y pub/sub de tiempo real) · zod ·
-pino · prom-client · ws · Vitest + supertest. Voz: Deepgram (STT/TTS) detrás de una interfaz, `mock` por defecto.
-Fase 7, cada uno detrás de una interfaz con modo simulado por defecto: correo (nodemailer; `mock` guarda en
-`email_outbox`), ubicación aproximada (maxmind + archivo local de DB-IP; `mock`) y archivos (carpeta local o
-cualquier S3 con `@aws-sdk/client-s3`). `qrcode` para el QR de la verificación en dos pasos.
+1. [Qué es el proyecto](#1-qué-es-el-proyecto)
+2. [Cómo funciona](#2-cómo-funciona)
+3. [Tecnologías](#3-tecnologías)
+4. [Qué necesita el profesor](#4-qué-necesita-el-profesor)
+5. [Acceso y roles](#5-acceso-y-roles)
+6. [Guía de pruebas función por función](#6-guía-de-pruebas-función-por-función)
+7. [Pruebas automatizadas](#7-pruebas-automatizadas)
+8. [Limitaciones conocidas y decisiones de diseño](#8-limitaciones-conocidas-y-decisiones-de-diseño)
+9. [Solución de problemas](#9-solución-de-problemas)
+10. [Estructura del repositorio](#10-estructura-del-repositorio)
+11. [Glosario](#11-glosario)
 
-## Relación con los otros repositorios
+## 1. Qué es el proyecto
 
-| Repositorio            | Relación                                                                                                                                                                                                                                                                                                  |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `atencion-ia-database` | Dueño del esquema **y** del `docker-compose.yml` con Postgres (5434) y Redis (6380). Este repo lo **introspecciona** (`npx prisma db pull`); nunca crea ni altera tablas. Los tests aplican sus migraciones desde `../atencion-ia-database/migrations`, así que **las tres carpetas deben ser hermanas**. |
-| `atencion-ia-frontend` | Cliente de esta API y del WebSocket (Fase 4). Su servidor de Vite reenvía `/api` y `/ws` aquí: mismo origen.                                                                                                                                                                                              |
+Un banco ficticio, **Banco Cordillera**, atiende a sus clientes desde el navegador. El cliente
+escribe o **llama por voz** sin registrarse, y un asistente de IA le responde usando **solo** la
+base de conocimiento del banco (la técnica se llama RAG: el asistente primero busca en esa base y
+responde con lo que encontró). Cuando el asistente no debe o no puede resolver (posible fraude,
+cliente molesto, pide una persona, no encuentra la respuesta), el sistema **escala** el caso:
+aparece al instante en la cola de los asesores, que leen todo el historial antes de tomarlo y
+siguen la conversación por chat o se unen a la llamada. Está pensado para un equipo de atención al
+cliente (asesores y un administrador) y para clientes que no quieren instalar nada.
 
-## Primera vez (Windows, cmd.exe)
+Capacidades principales:
+
+- **Chat con IA** que responde con la base de conocimiento y no inventa datos de cuentas.
+- **Escalamiento automático** a una persona, con prioridad (urgente, alta, normal) y motivo.
+- **Panel de asesores en tiempo real**: cola priorizada, historial antes de tomar, responder y cerrar.
+- **Llamadas de voz** desde el navegador: la IA escucha y responde con voz; el asesor puede unirse
+  a la llamada (WebRTC) viendo la transcripción en vivo.
+- **Adjuntos** (imagen o PDF) en el chat, que la IA nunca lee.
+- **Cuentas del equipo** solo por invitación, con recuperación de contraseña, verificación en dos
+  pasos, sesiones activas y perfil con foto.
+- **Administración**: base de conocimiento, respuestas predefinidas, equipo y analítica.
+- **Seguridad y privacidad** respaldadas por pruebas: aislamiento entre clientes y entre asesores,
+  límites de uso, consentimiento de la llamada y retención de transcripciones.
+
+## 2. Cómo funciona
+
+### El recorrido de principio a fin
+
+1. **El cliente abre el chat** (`#/chat`). Al pulsar **Iniciar chat**, el servidor crea una sesión
+   anónima guardada en una cookie que el JavaScript de la página no puede leer (así un script
+   malicioso no puede robarla).
+2. **Escribe un mensaje.** La API lo guarda y lo pasa al **motor conversacional**, que hace dos cosas
+   a la vez: clasifica la intención y el ánimo del cliente con la IA, y busca en la base de
+   conocimiento los fragmentos más parecidos a la pregunta (búsqueda por significado con
+   _embeddings_ en PostgreSQL + pgvector).
+3. **El motor decide.** Si una regla de escalamiento aplica (fraude, pide un asesor, enojo, reclamos
+   repetidos, sin respuesta en la base…), no gasta una respuesta de la IA: escala. Si no, la IA
+   redacta la respuesta solo con esos fragmentos y el historial de esa conversación.
+4. **El cliente ve la respuesta al instante** por un WebSocket (una conexión abierta que el servidor
+   usa para enviar eventos al navegador sin que la página tenga que preguntar).
+5. **Si escala**, la conversación pasa a la cola con su prioridad y el **worker** (un proceso aparte
+   que atiende colas de trabajo guardadas en Redis) avisa a los asesores disponibles. El caso
+   aparece en el panel sin recargar.
+6. **Un asesor lo toma**, lee el historial (con la intención y el ánimo detectados), responde y lo
+   cierra. Lo que escribe llega al cliente en tiempo real.
+7. **Por voz es igual**: el audio del cliente viaja por otro WebSocket, un servicio de voz lo
+   convierte en texto (STT) y ese texto entra al **mismo motor**. La respuesta vuelve convertida en
+   voz (TTS). Si la llamada escala, el asesor se une y hablan de navegador a navegador (WebRTC).
+8. **El administrador** mantiene la base de conocimiento. Al publicar un artículo, el worker lo
+   divide en fragmentos y calcula sus embeddings para que el asistente pueda usarlo.
+
+### Arquitectura
+
+```mermaid
+flowchart LR
+  subgraph Navegador
+    W["Widget del cliente<br/>(#/chat)"]
+    P["Panel de asesores y<br/>administración"]
+  end
+  subgraph Vercel
+    F["Frontend estático<br/>(Vite, JavaScript sin framework)"]
+  end
+  subgraph Railway
+    A["API Node.js + Express<br/>REST · WebSocket /ws · /ws/voice"]
+    K["Worker (BullMQ)<br/>avisos · índice del RAG · purga de voz"]
+    D[("PostgreSQL 16 + pgvector")]
+    R[("Redis 7<br/>colas · límites · pub/sub")]
+  end
+  IA["Anthropic Claude<br/>(respuestas y clasificación)"]
+  V["Voyage AI<br/>(embeddings)"]
+  DG["Deepgram<br/>(voz a texto y texto a voz)"]
+  S3["Cloudflare R2<br/>(adjuntos y fotos)"]
+  SES["Amazon SES<br/>(correo)"]
+
+  F -- "descarga la app" --> W
+  F -- "descarga la app" --> P
+  W -- "HTTPS y WebSocket" --> A
+  P -- "HTTPS y WebSocket" --> A
+  P <-. "audio WebRTC" .-> W
+  A <--> D
+  A <--> R
+  K <--> R
+  K <--> D
+  A --> IA
+  A --> V
+  A --> DG
+  A --> S3
+  A --> SES
+  K --> V
+```
+
+El DNS del dominio está en Cloudflare. La aplicación (`atencion.`) y la API (`api-atencion.`) son
+orígenes distintos del mismo sitio, por eso las cookies de sesión viajan entre ambos.
+
+### Flujo principal: un mensaje que escala a un asesor
+
+```mermaid
+sequenceDiagram
+  actor C as Cliente
+  participant API
+  participant M as Motor conversacional
+  participant IA as Claude y Voyage
+  participant Q as Redis y worker
+  actor As as Asesor (panel)
+
+  C->>API: Envía un mensaje desde el widget
+  API->>M: Turno del cliente
+  par En paralelo
+    M->>IA: Clasificar intención y ánimo
+  and
+    M->>IA: Embeddings y búsqueda en la base de conocimiento
+  end
+  alt Una regla de escalamiento aplica
+    M-->>API: Escalar con prioridad y motivo
+    API-->>C: "Te estamos comunicando con un asesor…"
+    API->>Q: Encola el aviso
+    Q-->>As: El caso aparece en la cola (WebSocket)
+    As->>API: Tomar caso y responder
+    API-->>C: Respuesta del asesor (WebSocket)
+  else La IA puede responder
+    M->>IA: Redactar con los fragmentos encontrados
+    API-->>C: Respuesta del asistente (WebSocket)
+  end
+```
+
+Más detalle: las reglas de escalamiento y el aislamiento del RAG en [docs/rag.md](docs/rag.md), la
+voz en [docs/adr/0010-arquitectura-de-voz.md](docs/adr/0010-arquitectura-de-voz.md) y todas las rutas
+de la API en [docs/referencia-tecnica.md](docs/referencia-tecnica.md).
+
+## 3. Tecnologías
+
+Las versiones son los rangos declarados en el `package.json` de cada repositorio, el `Dockerfile` y
+el `docker-compose.yml` de `atencion-ia-database`.
+
+| Tecnología                                            | Versión                                   | Para qué se usa                                                                                                         | Por qué se eligió                                                                                                                 |
+| ----------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Node.js**                                           | 24 en la imagen y en la CI (mínimo 20)    | Ejecuta la API y el worker                                                                                              | Un solo lenguaje con el frontend y buen manejo de muchas conexiones abiertas (WebSockets).                                        |
+| **TypeScript**                                        | ^5.9.3                                    | Lenguaje del backend                                                                                                    | Tipos en los contratos entre módulos; la CI revisa también los tests.                                                             |
+| **Express**                                           | ^4.22.3                                   | API REST (rutas → controlador → servicio)                                                                               | Estándar conocido, con middlewares simples (helmet, CORS, compresión, límites).                                                   |
+| **zod**                                               | ^3.25.76                                  | Valida cada entrada y la configuración al arrancar                                                                      | Errores en español por campo; si la configuración es insegura, el servidor no arranca.                                            |
+| **ws**                                                | ^8.22.0                                   | WebSocket de eventos (`/ws`) y de voz (`/ws/voice`)                                                                     | Control fino de la autenticación, los cierres y el límite de audio.                                                               |
+| **PostgreSQL + pgvector**                             | imagen `pgvector/pgvector:pg16`           | Datos, reglas garantizadas por la base y búsqueda por significado                                                       | Una sola base para datos y vectores; los CHECK, índices únicos parciales y triggers protegen las reglas aunque falle el código.   |
+| **Prisma**                                            | ^6.19.3                                   | Cliente tipado de la base de datos                                                                                      | Solo como cliente: el esquema lo manda el SQL ([ADR 0001](docs/adr/0001-prisma-solo-como-cliente.md)).                            |
+| **Redis** (ioredis)                                   | imagen `redis:7-alpine` · ioredis ^5.11.1 | Límites de uso, colas y difusión de eventos entre instancias (pub/sub)                                                  | Comparte el estado entre varias instancias de la API y el worker.                                                                 |
+| **BullMQ**                                            | ^5.81.5                                   | Colas: avisos de escalamiento, índice del RAG, barrido y purga de llamadas                                              | Reintentos y trabajos sin duplicar; el cliente no espera estas tareas.                                                            |
+| **Anthropic Claude** (`@anthropic-ai/sdk`)            | ^0.129.0                                  | Redacta las respuestas y clasifica intención y ánimo                                                                    | Detrás de una interfaz: `AI_PROVIDER=mock` en desarrollo y pruebas ([ADR 0005](docs/adr/0005-proveedor-de-ia-intercambiable.md)). |
+| **Voyage AI**                                         | modelo `voyage-3.5` (configurable)        | Embeddings de 1024 dimensiones para el RAG                                                                              | Mismo adaptador intercambiable que la IA; se llama por HTTP.                                                                      |
+| **Deepgram**                                          | STT `nova-3` · TTS `aura-2-celeste-es`    | Voz a texto y texto a voz en español                                                                                    | Transcripción en tiempo real y voz en español ([ADR 0011](docs/adr/0011-proveedor-de-voz.md)).                                    |
+| **nodemailer** (con **Amazon SES** por SMTP)          | ^10.1.4                                   | Correos: invitaciones, recuperación de contraseña y cambio de correo                                                    | Sirve con cualquier SMTP; en desarrollo `EMAIL_PROVIDER=mock` guarda los correos en una tabla.                                    |
+| **AWS SDK S3** (con **Cloudflare R2**)                | `@aws-sdk/client-s3` ^3.1143.0            | Guarda adjuntos y fotos de perfil                                                                                       | Compatible con cualquier S3; en desarrollo se usa una carpeta local.                                                              |
+| **bcrypt** · **jsonwebtoken** · **qrcode**            | ^6.0.0 · ^9.0.3 · ^1.5.4                  | Contraseñas, tokens de acceso de 15 min y QR de la verificación en dos pasos                                            | Token en memoria y renovación por cookie httpOnly ([ADR 0002](docs/adr/0002-esquema-de-sesion.md)).                               |
+| **helmet** · **cors** · **express-rate-limit**        | ^8.3.0 · ^2.8.6 · ^8.7.0                  | Cabeceras de seguridad, orígenes permitidos y límites de uso (guardados en Redis)                                       | Defensa en capas, documentada en el [modelo de amenazas](docs/threat-model.md).                                                   |
+| **pino** · **prom-client**                            | ^10.3.1 · ^15.1.3                         | Logs estructurados (sin datos sensibles) y métricas Prometheus                                                          | Operación en producción: `/health`, `/ready` y `/metrics`.                                                                        |
+| **Vite** (frontend)                                   | ^7.3.7                                    | Servidor de desarrollo y build                                                                                          | Sin framework: el curso evalúa DOM, eventos y asincronía de forma directa.                                                        |
+| **Vitest** · **supertest** · **Playwright** · **axe** | ^4.1.12 · ^7.3.0 · ^1.63.0 · ^4.13.0      | Tests unitarios y de integración, E2E en Chromium y accesibilidad                                                       | Integración contra una base real con las migraciones reales; E2E contra el sistema completo.                                      |
+| **ESLint** · **Prettier**                             | ^10.11.0 · ^3.9.9                         | Reglas y formato (en el frontend, por ejemplo, prohíben `innerHTML`)                                                    | La CI los exige antes de las pruebas.                                                                                             |
+| **GitHub Actions** · **gitleaks**                     | gitleaks `v8.21.2`                        | CI en cada push: lint, tipos, tests (también en orden aleatorio), build, mutaciones, `npm audit` y búsqueda de secretos | Nada llega a `main` sin pasar las pruebas, y ningún secreto entra al historial.                                                   |
+| **Docker**                                            | imagen `node:24-bookworm-slim`            | Una imagen para la API y el worker; Postgres y Redis en desarrollo                                                      | El mismo artefacto en local y en Railway, sin usuario root.                                                                       |
+| **Railway** · **Vercel** · **Cloudflare**             | —                                         | API, worker, PostgreSQL y Redis en Railway; frontend en Vercel; DNS y R2 en Cloudflare                                  | Despliegue al hacer `push` a `main`, HTTPS automático y dominios propios.                                                         |
+
+## 4. Qué necesita el profesor
+
+### a) Opción recomendada: solo el navegador
+
+- Un navegador actualizado: **Chrome, Edge o Firefox** de escritorio, con acceso a internet.
+- La URL: <https://atencion.jonarproyectos.com>. No hay que instalar nada.
+- **Para las llamadas de voz:** micrófono y altavoces (o audífonos con micrófono). El navegador pide
+  permiso para usar el micrófono la primera vez que pulsas **Llamar**: elige **Permitir**. Si lo
+  negaste, se reactiva en el candado de la barra de direcciones → **Micrófono → Permitir** y se
+  recarga la página.
+- **Para entrar como administrador:** una aplicación de códigos en el teléfono (Google
+  Authenticator, Microsoft Authenticator o similar). La verificación en dos pasos es obligatoria para
+  ese rol (ver [Acceso y roles](#5-acceso-y-roles)).
+- **Para probar el tiempo real:** dos ventanas del navegador lado a lado, una como cliente y otra
+  como asesor. Para probar el rol de asesor y el de administrador a la vez, usa una ventana normal y
+  otra de incógnito (cada una guarda su propia sesión).
+- Para los adjuntos: un PDF y una foto (JPEG, PNG o WebP) de menos de 5 MB.
+
+Comprobación rápida de que todo está en línea: abre
+<https://api-atencion.jonarproyectos.com/ready>. Debe mostrar
+`{"status":"ready","checks":{"database":"ok","redis":"ok"}}`.
+
+### b) Opción local (opcional)
+
+Levanta todo en tu equipo con la IA, la voz, el correo y los archivos **simulados**: no hace falta
+ninguna clave de servicios externos. Los comandos se probaron en Windows 11 con `cmd.exe`.
+
+**Requisitos**
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) en ejecución (PostgreSQL y Redis
+  corren en contenedores).
+- [Node.js](https://nodejs.org/) **20 o superior** (la CI usa 24) con npm.
+- [Git](https://git-scm.com/).
+- Puertos libres: 5434 (PostgreSQL), 6380 (Redis), 4100 (API), 9465 (worker) y 5174 (frontend).
+- En Linux o macOS, además, el cliente `psql` de PostgreSQL (los scripts `.sh` lo usan).
+
+**1. Descarga los tres repositorios en la misma carpeta** (los tests y los scripts esperan que sean
+carpetas hermanas):
 
 ```bat
-:: 1. Base de datos y Redis (en el repo hermano)
-cd ..\atencion-ia-database
+mkdir atencion-ia
+cd atencion-ia
+git clone https://github.com/Jonar519/atencion-ia-database.git
+git clone https://github.com/Jonar519/atencion-ia-backend.git
+git clone https://github.com/Jonar519/atencion-ia-frontend.git
+```
+
+**2. Base de datos y Redis** (crea las tablas y carga los datos de prueba):
+
+```bat
+cd atencion-ia-database
 docker compose up -d
 scripts\migrate.bat
 scripts\seed.bat
-cd ..\atencion-ia-backend
+cd ..
+```
 
-:: 2. Dependencias y cliente de Prisma
+En Linux o macOS:
+
+```bash
+cd atencion-ia-database
+docker compose up -d
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5434/atencion_ia"
+./scripts/migrate.sh
+./scripts/seed.sh
+cd ..
+```
+
+Esperado: `Listo: N migracion(es) nueva(s) aplicada(s).` y `Datos de prueba cargados correctamente.`
+(si los repites, la migración dice `0 migracion(es)` y el seed no duplica nada).
+
+**3. Backend** (API y worker):
+
+```bat
+cd atencion-ia-backend
 npm install
 npx prisma generate
-
-:: 3. Configuración: copia y pon secretos propios
 copy .env.example .env
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
-::    (pega un valor en JWT_SECRET y OTRO distinto en IP_HASH_SECRET, dentro de .env)
+```
 
-:: 4. Indexar la base de conocimiento del seed para el RAG (una vez; vienen sin embeddings)
+Abre `.env` y reemplaza `JWT_SECRET` por el valor que imprimió el último comando. Vuelve a ejecutar
+ese comando y pon el segundo valor (distinto) en `IP_HASH_SECRET`. El resto de `.env.example` ya
+trae valores de desarrollo, por ejemplo:
+
+```ini
+DATABASE_URL=postgresql://postgres:postgres@localhost:5434/atencion_ia
+REDIS_URL=redis://localhost:6380
+PORT=4100
+CORS_ORIGIN=http://localhost:5174
+AI_PROVIDER=mock
+VOICE_PROVIDER=mock
+EMAIL_PROVIDER=mock
+STORAGE_PROVIDER=local
+```
+
+Indexa la base de conocimiento de prueba (una vez) y arranca la API y el worker, **cada uno en su
+propia ventana** de `cmd`:
+
+```bat
 npm run kb:reindex
-
-:: 5. Arrancar en desarrollo (recarga al guardar), en DOS ventanas de cmd:
 npm run dev
+```
+
+```bat
+cd atencion-ia\atencion-ia-backend
 npm run worker
 ```
 
-La API queda en `http://localhost:4100` y el worker expone `/health` en `:9465`. Para detenerla: **Ctrl+C** (hace el apagado
-ordenado; cmd.exe envía SIGINT, que sigue el mismo camino que el SIGTERM de producción).
+Esperado: `API escuchando en http://localhost:4100`, `WebSocket de voz en /ws/voice (proveedor: mock)`
+y, en la otra ventana, `Worker iniciado`.
 
-Producción local (compilado): `npm run build` y luego `npm start`.
-
-## Scripts
-
-| Comando                                                                 | Qué hace                                                                      |
-| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `npm run dev`                                                           | Servidor con recarga automática (tsx)                                         |
-| `npm run build` / `npm start`                                           | Compila a `dist/` / ejecuta lo compilado                                      |
-| `npm test`                                                              | Tests unitarios y de integración (recrea la base `atencion_ia_test`)          |
-| `npm run lint`                                                          | ESLint + Prettier (verificación, no modifica)                                 |
-| `npm run format`                                                        | Aplica Prettier                                                               |
-| `npm run typecheck`                                                     | `tsc` del código y de los tests                                               |
-| `npm run prisma:pull`                                                   | Re-introspecciona el esquema tras una migración nueva                         |
-| `scripts\verify.bat`                                                    | lint → typecheck → tests → build (lo mismo que la CI)                         |
-| `npm run worker`                                                        | Worker de colas: indexación del RAG y avisos de escalamiento (tsx)            |
-| `npm run worker:start`                                                  | Worker compilado (tras `npm run build`)                                       |
-| `npm run kb:reindex`                                                    | Re-indexa TODA la KB para el RAG, sin necesitar el worker                     |
-| `npm run rag:calibrate`                                                 | Mide la calidad del RAG y ayuda a elegir `RAG_MIN_SCORE`                      |
-| `npm run test:shuffle`                                                  | Tests en orden aleatorio (detecta dependencias entre tests)                   |
-| `npm run test:mutations`                                                | Rompe a propósito cada regla crítica y exige que los tests fallen             |
-| `npm run voice:demo`                                                    | Llamada de voz de demo por consola contra la API ([guía](docs/demo-fase5.md)) |
-| `npm run voice:purge`                                                   | Purga las transcripciones vencidas (lo mismo que el worker cada hora)         |
-| `npm run admin:crear -- --correo c --nombre "n"`                        | Crea el primer admin (contraseña sin eco, nunca por argumento; idempotente)   |
-| `npm run staff:reset-mfa -- correo`                                     | Quita la MFA de una cuenta (queda en la auditoría y cierra sus sesiones)      |
-| `npm run storage:purge`                                                 | Borra del almacenamiento los archivos en cola de borrado (adjuntos, fotos)    |
-| `npm run loadtest:setup` · `loadtest:messages` · `loadtest:escalations` | Pruebas de carga ([loadtests/README.md](loadtests/README.md))                 |
-
-## Configuración (`.env`)
-
-Se valida con zod al arrancar: si algo falta o es inseguro, **el servidor no arranca** y
-dice qué corregir. Ver `.env.example` (comentado).
-
-| Variable                                                          | Por defecto                           | Nota                                                                                                                |
-| ----------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                                    | — (obligatoria)                       | `postgresql://postgres:postgres@localhost:5434/atencion_ia`                                                         |
-| `REDIS_URL`                                                       | `redis://localhost:6380`              |                                                                                                                     |
-| `PORT`                                                            | `4100`                                | 4000 lo usa el Proyecto 1                                                                                           |
-| `JWT_SECRET`, `IP_HASH_SECRET`                                    | — (obligatorias)                      | ≥ 32 caracteres, distintas entre sí                                                                                 |
-| `JWT_EXPIRES_IN` / `REFRESH_TOKEN_TTL_DAYS`                       | `15m` / `7`                           |                                                                                                                     |
-| `CORS_ORIGIN`                                                     | `http://localhost:5174`               | Obligatoria en producción                                                                                           |
-| `TRUST_PROXY`                                                     | `0`                                   | `1` detrás de un balanceador                                                                                        |
-| `METRICS_TOKEN`                                                   | vacío (= `/metrics` responde 404)     | ≥ 16 caracteres                                                                                                     |
-| `SHUTDOWN_TIMEOUT_MS` / `SHUTDOWN_DRAIN_DELAY_MS`                 | `10000` / `0`                         |                                                                                                                     |
-| `RATE_LIMIT_SCALE`                                                | `1`                                   | Solo pruebas de carga; prohibido en producción                                                                      |
-| `AI_PROVIDER`                                                     | `mock`                                | `anthropic` exige `ANTHROPIC_API_KEY` y `VOYAGE_API_KEY`; `mock` prohibido en producción                            |
-| `ANTHROPIC_MODEL` / `ANTHROPIC_CLASSIFIER_MODEL`                  | `claude-opus-5-5`                     | Ver [ADR 0005](docs/adr/0005-proveedor-de-ia-intercambiable.md)                                                     |
-| `VOYAGE_MODEL`                                                    | `voyage-3.5`                          | Embeddings de 1024 dimensiones                                                                                      |
-| `RAG_TOP_K` / `RAG_MIN_SCORE`                                     | `4` / 0.2 (mock), 0.45 (Voyage)       | El de Voyage está **sin calibrar** ([docs/rag.md](docs/rag.md))                                                     |
-| `AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER`                              | `60000`                               | Tope diario de tokens por cliente                                                                                   |
-| `WORKER_CONCURRENCY` / `WORKER_METRICS_PORT`                      | `2` / `9465`                          |                                                                                                                     |
-| `VOICE_PROVIDER`                                                  | `mock`                                | `deepgram` exige `DEEPGRAM_API_KEY`; `mock` prohibido en producción ([ADR 0011](docs/adr/0011-proveedor-de-voz.md)) |
-| `DEEPGRAM_STT_MODEL` / `DEEPGRAM_LANGUAGE` / `DEEPGRAM_TTS_MODEL` | `nova-3` / `es` / `aura-2-celeste-es` |                                                                                                                     |
-| `VOICE_TRANSCRIPT_RETENTION_DAYS`                                 | `90`                                  | 1–180 ([docs/privacy-voice.md](docs/privacy-voice.md))                                                              |
-| `VOICE_MAX_CALL_SECONDS` / `VOICE_DAILY_SECONDS_PER_CUSTOMER`     | `900` / `1800`                        | Topes por llamada y por cliente en 24 h                                                                             |
-| `VOICE_RECONNECT_GRACE_MS` / `VOICE_CONNECT_TIMEOUT_MS`           | `15000` / `30000`                     |                                                                                                                     |
-| `ICE_SERVERS`                                                     | `[]`                                  | STUN/TURN (JSON) para WebRTC entre cliente y agente                                                                 |
-| `MFA_ENCRYPTION_KEY`                                              | vacía (= derivada de `JWT_SECRET`)    | Cifra el secreto de la MFA (AES-256-GCM, 32 bytes en base64); obligatoria en producción                             |
-| `APP_BASE_URL`                                                    | `http://localhost:5174`               | Base de los enlaces de los correos                                                                                  |
-| `EMAIL_PROVIDER` / `SMTP_URL` / `EMAIL_FROM`                      | `mock` / — / Banco Cordillera         | `mock` no envía: guarda en `email_outbox`; prohibido en producción                                                  |
-| `GEO_PROVIDER` / `GEO_DB_PATH`                                    | `mock` / —                            | `dbip`: archivo `.mmdb` local de DB-IP; la IP nunca sale del servidor                                               |
-| `STORAGE_PROVIDER` / `STORAGE_LOCAL_DIR`                          | `local` / `../atencion-ia-storage`    | `s3` exige `S3_BUCKET` y sus credenciales (`S3_ENDPOINT` para MinIO o R2)                                           |
-
-## API
-
-Todas las rutas bajo `/api` exigen `Authorization: Bearer <accessToken>`, salvo
-`/api/auth/login`, `/refresh`, `/logout` y los pasos sin sesión de la Fase 7 (`/mfa/*`,
-`/forgot-password`, `/reset-password`, `/confirm-email`). Errores: `{ error, details? }`; los de
-validación traen `details: [{ field, message }]` en español.
-
-| Método y ruta                                                                                                | Quién                                    | Qué hace                                                                                                                                                                                                                        |
-| ------------------------------------------------------------------------------------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/login`                                                                                       | público                                  | `{ email, password }` → `{ accessToken, staff }` + cookie de refresh                                                                                                                                                            |
-| `POST /api/auth/refresh`                                                                                     | cookie + `X-Requested-With: atencion-ia` | Rota el refresh y entrega un access token nuevo                                                                                                                                                                                 |
-| `POST /api/auth/logout`                                                                                      | cookie + `X-Requested-With: atencion-ia` | Revoca la sesión                                                                                                                                                                                                                |
-| `GET /api/auth/me`                                                                                           | staff                                    | Datos propios                                                                                                                                                                                                                   |
-| `POST /api/auth/mfa/verify` · `/mfa/enroll/start` · `/mfa/enroll/confirm`                                    | token del paso 1                         | Segundo paso del login (código TOTP o de respaldo) · activación obligatoria de la MFA del admin                                                                                                                                 |
-| `POST /api/auth/forgot-password` · `/reset-password`                                                         | público                                  | Enlace de un solo uso por correo (misma respuesta exista o no la cuenta) · nueva contraseña (cierra todas las sesiones)                                                                                                         |
-| `POST /api/auth/confirm-email`                                                                               | público (token del correo)               | Confirma el cambio de correo                                                                                                                                                                                                    |
-| `GET` · `PATCH /api/profile`                                                                                 | staff                                    | Perfil propio (nombre, teléfono; el tema lo decide el sistema operativo)                                                                                                                                                        |
-| `POST /api/profile/email` · `/password`                                                                      | staff (pide la contraseña actual)        | Cambiar correo (enlace al nuevo, aviso al anterior) · cambiar contraseña                                                                                                                                                        |
-| `PUT` · `DELETE /api/profile/avatar` · `GET /api/staff/:id/avatar`                                           | staff                                    | Foto de perfil (recorte de 256 px)                                                                                                                                                                                              |
-| `GET /api/profile/sessions` · `DELETE /sessions/:id` · `POST /sessions/revoke-others`                        | staff                                    | Sesiones activas (navegador, ubicación aproximada, red truncada) · cerrar una · cerrar las demás                                                                                                                                |
-| `POST /api/profile/mfa/setup` · `/confirm` · `/disable` · `/backup-codes`                                    | staff                                    | Verificación en dos pasos y códigos de respaldo                                                                                                                                                                                 |
-| `GET /api/profile/export`                                                                                    | staff                                    | Sus datos personales en JSON (sin secretos ni contenido de clientes)                                                                                                                                                            |
-| `GET /api/staff/:id/export` · `POST /api/staff/:id/anonymize`                                                | **admin**                                | Exportar los datos de un asesor · anonimizar su cuenta (409 si tiene casos en curso; [docs/data-retention.md](docs/data-retention.md))                                                                                          |
-| `POST /api/conversations/:id/reassign`                                                                       | **admin**                                | `{ agentId }`: pasa un caso en curso a otra persona                                                                                                                                                                             |
-| `POST /api/conversations/:id/attachments` · `GET …/attachments/:attachmentId`                                | el asignado · quien ve el caso           | Adjuntar (imagen o PDF, ≤ 5 MB) · descargar ([docs/attachments.md](docs/attachments.md))                                                                                                                                        |
-| `GET /api/canned-responses` · `POST` · `PATCH` · `DELETE /:id`                                               | staff (lectura) · **admin** (escritura)  | Respuestas predefinidas con `{cliente}` y `{asesor}`                                                                                                                                                                            |
-| `GET /api/admin/analytics?days=`                                                                             | **admin**                                | Tiempos de resolución, tasa de escalamiento, CSAT **simulado** y volumen por hora ([docs/analytics.md](docs/analytics.md))                                                                                                      |
-| `PATCH /api/staff/me/availability`                                                                           | staff                                    | `{ availability: offline\|available\|busy\|away }`                                                                                                                                                                              |
-| `GET /api/staff` · `PATCH /api/staff/:id`                                                                    | **admin**                                | Lista del equipo (con las invitaciones pendientes y su vencimiento) y edición; desactivar cierra sesiones. **No existe** crear una cuenta con contraseña                                                                        |
-| `POST /api/staff/invitations` · `POST /api/staff/:id/invitation/resend` · `DELETE /api/staff/:id/invitation` | **admin**                                | Invitar (nombre, correo, rol) · reenviar (invalida el enlace anterior) · cancelar (borra la cuenta pendiente). El enlace NUNCA vuelve en la respuesta: solo viaja por correo                                                    |
-| `POST /api/auth/invitation` · `POST /api/auth/invitation/accept`                                             | público (token en el cuerpo)             | Ver a quién invitan · completar la cuenta con la contraseña propia (misma política; si no cumple, el enlace no se gasta). Luego, igual que el login: un admin debe activar la MFA. Cualquier enlace que no sirva → el mismo 400 |
-| `GET /api/kb/articles` · `GET /api/kb/articles/:id`                                                          | staff                                    | Base de conocimiento (filtros `status`, `category`, `q`; cursor)                                                                                                                                                                |
-| `POST` · `PATCH` · `DELETE /api/kb/articles/:id`                                                             | **admin**                                | Crear/editar/borrar artículos (la versión sube si cambia título o cuerpo)                                                                                                                                                       |
-| `GET /api/conversations?scope=mine\|queue\|all`                                                              | staff (`all` solo admin)                 | Listado (cola: por prioridad; resto: por último mensaje, con cursor)                                                                                                                                                            |
-| `GET /api/conversations/:id`                                                                                 | dueño o cola                             | Detalle: cliente, escalamientos, llamadas                                                                                                                                                                                       |
-| `GET /api/conversations/:id/messages`                                                                        | dueño o cola                             | Historial, del más reciente hacia atrás, con cursor                                                                                                                                                                             |
-| `POST /api/conversations/:id/take`                                                                           | staff                                    | Tomar de la cola (atómico; respeta `max_concurrent`)                                                                                                                                                                            |
-| `POST /api/conversations/:id/close`                                                                          | asignado o admin                         | `{ reason?, note? }`; resuelve el escalamiento                                                                                                                                                                                  |
-| `POST /api/conversations/:id/messages`                                                                       | el asignado                              | `{ content, clientMsgId? }`; idempotente por `clientMsgId`                                                                                                                                                                      |
-| `POST /api/widget/sessions`                                                                                  | público (cliente)                        | Sesión anónima `{ displayName? }`. Con `X-Requested-With`: cookie httpOnly y **sin** token en el cuerpo; sin él (API/curl): `{ token: "wgt_…" }`                                                                                |
-| `GET /api/widget/session` · `POST /api/widget/session/end`                                                   | cliente                                  | Datos de la sesión actual · cerrarla (revoca el token y borra la cookie)                                                                                                                                                        |
-| `GET` · `POST /api/widget/conversations`                                                                     | cliente (cookie o `Bearer wgt_…`)        | Sus conversaciones (máx. 3 abiertas)                                                                                                                                                                                            |
-| `GET /api/widget/conversations/:id/messages`                                                                 | el cliente dueño                         | Historial (sin el análisis de IA ni datos internos)                                                                                                                                                                             |
-| `POST /api/widget/conversations/:id/messages`                                                                | el cliente dueño                         | `{ content, clientMsgId? }` → motor conversacional: respuesta o traspaso                                                                                                                                                        |
-| `POST /api/widget/conversations/:id/attachments` · `GET /api/widget/attachments/:id`                         | el cliente dueño                         | Adjuntar una imagen o un PDF (la IA solo recibe la señal de que existe) · descargar                                                                                                                                             |
-| `GET /api/widget/voice/consent`                                                                              | cliente                                  | Aviso de consentimiento vigente (versión y texto)                                                                                                                                                                               |
-| `POST /api/widget/conversations/:id/calls`                                                                   | cliente dueño                            | `{ consentVersion, accepted: true }` → llamada + formato de audio + ICE                                                                                                                                                         |
-| `GET /api/widget/calls/:id` · `POST /api/widget/calls/:id/end`                                               | cliente dueño                            | Estado de la llamada · colgar                                                                                                                                                                                                   |
-| `GET /api/calls/active`                                                                                      | staff                                    | Llamadas activas que puede ver                                                                                                                                                                                                  |
-| `POST /api/calls/:id/join`                                                                                   | agente (toma el caso si está en cola)    | Se une: devuelve la transcripción acumulada                                                                                                                                                                                     |
-| `POST /api/calls/:id/leave` · `POST /api/calls/:id/end`                                                      | el agente asignado (colgar: o admin)     | Salir de la llamada · colgarla                                                                                                                                                                                                  |
-| `GET /api/calls/:id/transcript`                                                                              | quien ve el caso                         | Transcripción (vacía si se purgó)                                                                                                                                                                                               |
-| `GET /ws/voice` (upgrade)                                                                                    | cliente o agente unido                   | Audio + señalización WebRTC (ver abajo)                                                                                                                                                                                         |
-| `GET /ws` (upgrade)                                                                                          | staff o cliente                          | Tiempo real, solo recepción (ver abajo)                                                                                                                                                                                         |
-| `GET /health` · `GET /ready`                                                                                 | sondas                                   | Liveness / readiness (Postgres + Redis)                                                                                                                                                                                         |
-| `GET /metrics`                                                                                               | `Bearer METRICS_TOKEN`                   | Prometheus                                                                                                                                                                                                                      |
-
-### Quién ve qué (autorización por dueño)
-
-Una sola regla en `src/modules/conversations/conversations.access.ts` (ver
-[ADR 0003](docs/adr/0003-autorizacion-por-alcance.md)):
-
-- **admin**: todas las conversaciones.
-- **agent**: las asignadas a él (en curso o cerradas) y la **cola general** (en espera y
-  sin asignar), para leer el historial antes de tomar el caso. No ve las que atiende la
-  IA sin escalar ni las de otros agentes: esas responden **404**.
-
-### Sesión del cliente del widget
-
-La sesión es una cookie `atencion_ia_widget` (httpOnly, `SameSite=Strict`, `Path=/`): el token
-`wgt_…` nunca llega al JavaScript del navegador, así que un XSS no puede robarlo. Las escrituras
-autenticadas **por cookie** exigen `X-Requested-With: atencion-ia` (CSRF, como el refresh del
-staff). `Authorization: Bearer wgt_…` sigue funcionando para curl y la demo de la Fase 3. Ver
-[ADR 0009](docs/adr/0009-sesion-del-widget-en-cookie.md).
-
-## Tiempo real (WebSocket `/ws`)
-
-Mismo puerto que la API. **Solo recepción**: enviar sigue siendo por REST (validación,
-idempotencia, rate limit y tope de IA en un solo lugar). Ver
-[ADR 0008](docs/adr/0008-tiempo-real-solo-recepcion.md).
-
-- **Autenticación en el primer mensaje** (`{ "type": "auth", "accessToken" }` para el staff;
-  `{ "type": "auth" }` para el widget, que usa la cookie del upgrade). Nunca en la URL.
-- **Origin** debe estar en `CORS_ORIGIN` (evita cross-site WebSocket hijacking).
-- Cierres: `4401` credencial inválida · `4408` no se autenticó en 5 s · `4409` venció el token o
-  la sesión (el cliente renueva y reconecta) · `4429` más de 20 mensajes en 10 s. Heartbeat cada 30 s.
-- **Quién recibe qué** (`src/realtime/audience.ts`, función pura): el cliente, solo eventos de
-  **sus** conversaciones, sin el análisis de la IA (intención/sentimiento) y con el asesor solo por
-  su nombre de pila; el staff, solo lo que `canViewConversation` le permite. Cuando un caso sale
-  del alcance de un agente (otro lo tomó), le llega `conversation.updated` con `visible: false`.
-- Los eventos se publican **después del commit** en Redis (canal `atencion-ia:realtime`), así
-  varias instancias de la API y el worker entregan a todos los sockets.
-- Lo publicado mientras un cliente estaba desconectado **no** se reenvía: al reconectar, el
-  frontend vuelve a pedir el historial por REST.
-
-## Voz (`/ws/voice`, Fase 5)
-
-Detalle en [ADR 0010](docs/adr/0010-arquitectura-de-voz.md), la política de datos en
-[docs/privacy-voice.md](docs/privacy-voice.md) y la demo paso a paso en [docs/demo-fase5.md](docs/demo-fase5.md).
-
-- **Consentimiento primero:** sin aceptar el aviso vigente no hay llamada (la base exige `consent_given_at`).
-- **Audio del cliente → STT → el MISMO motor de la Fase 3** (`handleCustomerTurn` con `channel: "voice"`):
-  cada frase final es un turno, con RAG, intención y reglas de escalamiento idénticas al texto. La
-  respuesta vuelve como audio (TTS). Si el motor escala, la llamada pasa a `waiting_agent`.
-- **Agente:** `POST /api/calls/:id/join` toma el caso (misma toma atómica del panel) y devuelve la
-  transcripción acumulada. Luego abre `/ws/voice`: la señalización WebRTC se relea **solo** al otro
-  participante de esa llamada, por Redis pub/sub (`atencion-ia:voice`), así funciona con varias instancias.
-  El audio entre personas va de navegador a navegador.
-- **Transcripción en vivo:** los parciales llegan al panel (`call.transcript.partial`) solo para el staff que ve el caso.
-- **Límites:** audio ≤ 1,25× tiempo real (4429), tope diario de segundos por cliente, duración
-  máxima, una conexión por rol ("la más nueva gana"), gracia de reconexión.
-- **Mantenimiento (worker):** barrido de llamadas abandonadas cada minuto y purga por retención cada hora.
-- Cierres: `4400` mensaje o audio inválido · `4401` credencial inválida · `4403` no puede estar en esa
-  llamada · `4408` sin autenticarse · `4409` venció la sesión · `4410` reemplazada · `4429` abuso.
-
-### Rate limiting (Redis)
-
-| Límite                       | Clave                       | Cupo                                               |
-| ---------------------------- | --------------------------- | -------------------------------------------------- |
-| Global `/api`                | IP                          | 600 / 15 min                                       |
-| Login                        | IP (solo fallos)            | 10 / 15 min                                        |
-| Bloqueo progresivo           | cuenta (SHA-256 del correo) | libre hasta 5 fallos; luego 1, 2, 4… min (máx. 60) |
-| Refresh / logout             | IP                          | 60 / 15 min                                        |
-| Mensajes de agente           | usuario                     | 60 / min                                           |
-| Escrituras de admin          | usuario                     | 120 / 15 min                                       |
-| Sesiones del widget          | IP                          | 20 / hora                                          |
-| Mensajes a la IA             | sesión del widget           | 12 / min                                           |
-| Tokens de IA                 | cliente                     | `AI_DAILY_TOKEN_BUDGET_PER_CUSTOMER` en 24 h       |
-| Llamadas nuevas              | sesión del widget           | 6 / hora                                           |
-| Unirse/salir/colgar llamadas | usuario                     | 30 / min                                           |
-| Audio de voz                 | conexión                    | 1,25× tiempo real (ráfagas de 2 s)                 |
-| Segundos de STT              | cliente                     | `VOICE_DAILY_SECONDS_PER_CUSTOMER` en 24 h         |
-
-## IA: RAG, intención y escalamiento
-
-Demo paso a paso en cmd.exe con los datos del seed: [docs/demo-fase3.md](docs/demo-fase3.md).
-Detalle completo en [docs/rag.md](docs/rag.md): flujo de un turno, las 7 reglas de
-escalamiento, las capas de aislamiento del RAG, las pruebas de mutación y la calibración.
-
-- **Proveedor** intercambiable (`AI_PROVIDER`): `mock` determinista por defecto; `anthropic`
-  (Claude + Voyage) implementado y probado con clientes simulados, **no contra el proveedor real**.
-- **Motor único** para texto y voz (`handleCustomerTurn`, [ADR 0007](docs/adr/0007-motor-conversacional-independiente-del-canal.md)).
-- **Aislamiento del RAG** garantizado también por la base (trigger de la migración 013,
-  [ADR 0006](docs/adr/0006-aislamiento-del-rag.md)).
-- **Escalamiento** sin duplicados (índice único parcial + `ON CONFLICT DO NOTHING`), con aviso a
-  los agentes disponibles por Redis pub/sub (canal `atencion-ia:realtime`).
-
-## Observabilidad
-
-- **Logs** estructurados (pino): una línea por petición con `requestId` (también en el
-  header `X-Request-Id`), método, ruta, estado, duración e id del staff. Se redactan
-  credenciales, cookies, secretos y **el contenido de los mensajes**. En desarrollo se
-  ven con colores; en producción, JSON.
-- **Métricas** Prometheus en `/metrics` (con token): duración HTTP por ruta como patrón
-  (nunca ids), eventos de autenticación y de conversaciones, conexiones WebSocket abiertas por tipo, latencia y tokens de IA por
-  proveedor y operación, escalamientos por motivo, similitud del RAG, trabajos por cola.
-  El worker expone las suyas en `WORKER_METRICS_PORT`.
-- **Sondas**: `/health` no consulta dependencias; `/ready` sí, y responde 503 durante el
-  apagado.
-- **Apagado ordenado** (SIGTERM/SIGINT): readiness 503 → drenaje → cierre de WebSockets → cierre HTTP esperando
-  lo que está en curso → auditoría pendiente → Redis → Postgres. Tiempo máximo
-  configurable.
-- **Auditoría** (`audit_log`): login (éxito/fallo/bloqueo), reutilización de refresh,
-  cambios de staff y KB, ver/tomar/cerrar/responder conversaciones. Sin correos de
-  logins fallidos ni contenido de mensajes; IP como HMAC.
-
-## Contenedor (Docker · despliegue en Railway)
-
-Una sola imagen para la API y el worker ([`Dockerfile`](Dockerfile), Node 24 sobre Debian 12, sin
-root). Cambia solo el comando:
-
-| Servicio | Comando de arranque                 | Salud                              |
-| -------- | ----------------------------------- | ---------------------------------- |
-| API      | por defecto (`node dist/server.js`) | `/ready` (en `PORT`)               |
-| Worker   | `node dist/workers/worker.js`       | `/health` en `WORKER_METRICS_PORT` |
+**4. Frontend** (en una tercera ventana):
 
 ```bat
-docker build -t atencion-ia-backend .
-docker run --rm -p 4100:4100 --env-file .env.produccion atencion-ia-backend
+cd atencion-ia\atencion-ia-frontend
+npm install
+npm run dev
 ```
 
-- **`node` directo, nunca `npm start`:** npm no reenvía SIGTERM y se perdería el apagado ordenado.
-- **Sin secretos en la imagen:** `.dockerignore` deja fuera `.env`. Las variables las pone la
-  plataforma; el worker necesita las mismas obligatorias que la API.
-- **Las migraciones no corren al arrancar:** van aparte, con `atencion-ia-database`.
-- **Scripts de operación compilados** (la imagen no trae `tsx`): `npm run kb:reindex:start`
-  (obligatorio al pasar de `mock` a Voyage: los vectores de un modelo no sirven para otro),
-  `npm run staff:reset-mfa:start -- correo`, `npm run admin:crear:start -- --correo c --nombre "n"`
-  y `npm run storage:purge:start`.
-- **Primer admin en producción** (el seed no se corre ahí): `npm run admin:crear` desde tu máquina
-  con solo `DATABASE_URL` en la sesión. Pide la contraseña dos veces sin eco (o la primera línea de
-  la entrada con `--stdin`), aplica la misma política y el mismo hash, y deja la cuenta activa y sin
-  MFA (el login le exige enrolarse). Si el correo ya existe o ya hay un admin activo, no cambia nada
-  y sale con 0. Auditado como `staff.first_admin_created`.
+Esperado: `Local: http://localhost:5174/`. La app usa por defecto la API en `http://localhost:4100`
+(`VITE_API_URL` en `.env.example` del frontend; solo hace falta cambiarlo si usas otro puerto).
 
-## Tests
+**5. Comprueba que funciona**
 
-```bat
-npm test
+1. <http://localhost:4100/ready> → `{"status":"ready","checks":{"database":"ok","redis":"ok"}}`.
+2. <http://localhost:5174> → la portada de Banco Cordillera.
+3. Entra al panel con una cuenta de prueba del seed (por ejemplo `laura@cordillera.example`; las
+   cuentas y su contraseña de prueba están en la
+   [referencia técnica de atencion-ia-database](https://github.com/Jonar519/atencion-ia-database/blob/main/docs/referencia-tecnica.md#datos-de-prueba-seed); solo existen en local).
+4. Sigue la [guía de pruebas](#6-guía-de-pruebas-función-por-función). Diferencias en local: la IA
+   simulada responde con reglas fijas, los correos no se envían (se guardan en la tabla
+   `email_outbox`, ver [Solución de problemas](#9-solución-de-problemas)) y el reconocimiento de voz
+   simulado no entiende lo que dices: reconoce frases de un guion de prueba.
+
+Para detener todo: **Ctrl+C** en cada ventana y `docker compose stop` en `atencion-ia-database`.
+
+## 5. Acceso y roles
+
+### Roles
+
+| Quién             | Cómo entra                                                            | Qué puede hacer                                                                                                                                                                                                                                            |
+| ----------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cliente**       | Sin cuenta: **Soy cliente → Iniciar chat** (nombre opcional)          | Chatear con la IA, llamar por voz, adjuntar archivos, ver solo **sus** conversaciones (máximo 3 abiertas a la vez).                                                                                                                                        |
+| **Asesor**        | **Entrar al panel de asesores** con correo y contraseña               | Ver la cola y leer un caso antes de tomarlo, tomar, responder, adjuntar, usar respuestas predefinidas, cerrar, unirse a llamadas, cambiar su disponibilidad y gestionar su perfil. No ve los casos de otros asesores ni los que atiende la IA sin escalar. |
+| **Administrador** | Igual que el asesor, más la **verificación en dos pasos obligatoria** | Todo lo del asesor, más: base de conocimiento, respuestas predefinidas, equipo (invitar, reenviar o cancelar invitaciones, reasignar casos, exportar datos y eliminar la cuenta de un asesor) y analítica.                                                 |
+
+La interfaz oculta lo que tu rol no puede hacer, pero quien decide es siempre la API: si alguien
+intenta entrar a una ruta de administrador con una cuenta de asesor, la pantalla lo devuelve al panel
+y la API responde 403.
+
+### Credenciales
+
+Las credenciales **no** están en este README. El estudiante las entrega por un canal privado, o
+envía una **invitación por correo** a la dirección del profesor:
+
+<!-- ACCESO: lo completa el estudiante -->
+
+- **Invitación por correo:** llega desde `no-responder@jonarproyectos.com` con un enlace a
+  **Completa tu cuenta**, donde eliges tu propia contraseña (mínimo 12 caracteres, sin tu nombre ni
+  tu correo). El enlace **vence a las 72 horas** y sirve una sola vez.
+- **Si la invitación venció o no funciona:** la pantalla dice **Invitación no válida** (el mismo
+  mensaje para un enlace vencido, usado, cancelado o mal copiado). Pide al estudiante que pulse
+  **Reenviar** en **Equipo**: llega un enlace nuevo con otras 72 horas y el anterior deja de servir.
+- **Si no llega el correo:** revisa la carpeta de spam. El servicio de correo está en modo de
+  pruebas y solo entrega a direcciones verificadas por el estudiante (ver
+  [Limitaciones](#8-limitaciones-conocidas-y-decisiones-de-diseño)); confírmale qué dirección usas.
+
+### Verificación en dos pasos (MFA)
+
+- **Administrador: obligatoria.** La primera vez que entras (o al completar una invitación de
+  administrador) aparece **Activa la verificación en dos pasos** con un código QR. Escanéalo con la
+  aplicación de códigos, escribe los 6 dígitos → **Activar y entrar**, guarda los **10 códigos de
+  respaldo**, marca **Ya guardé mis códigos** → **Continuar**. Desde entonces, después de la
+  contraseña se pide el código de la aplicación (o uno de respaldo, que sirve una sola vez).
+- **Asesor: opcional.** Se activa en **Mi perfil → Verificación en dos pasos → Activar**.
+
+### Si algo del acceso falla
+
+| Situación                                      | Qué hacer                                                                                                                                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Olvidaste la contraseña                        | En el inicio de sesión, **¿Olvidaste tu contraseña?** → escribe tu correo → **Enviar enlace**. El enlace vence en 15 minutos y sirve una vez.                       |
+| "Credenciales inválidas"                       | Revisa mayúsculas y espacios. Tras 5 intentos fallidos, la cuenta se bloquea unos minutos (1, 2, 4… hasta 60): espera y vuelve a intentar.                          |
+| "El código no es correcto"                     | Revisa que la hora del teléfono sea automática. Cinco códigos errados seguidos obligan a volver a escribir la contraseña. Puedes usar un código de respaldo.        |
+| Perdiste el teléfono y los códigos de respaldo | No hay botón para eso, a propósito. El estudiante quita la verificación de tu cuenta con un comando del servidor y, al entrar, la activas de nuevo.                 |
+| La sesión se cerró sola                        | El acceso dura 15 minutos y se renueva solo mientras usas la app; si pasas 7 días sin usarla, o si alguien cerró tus sesiones desde **Mi perfil**, vuelve a entrar. |
+
+## 6. Guía de pruebas función por función
+
+Un recorrido de unos **25 minutos** en producción, en este orden. La columna **Depende de** indica
+si la función usa un servicio externo (si ese servicio falla, la función puede fallar sin que sea
+un error del proyecto); "No" significa que solo usa la API y la base de datos propias.
+
+**Preparación:** ventana A (normal) para el **cliente** y ventana B (incógnito) para el **panel**,
+lado a lado. Necesitas una cuenta de administrador (y, si el estudiante la entregó, una de asesor;
+si no, el administrador hace todo lo del asesor).
+
+> **Antes de empezar, carga contenido en la base de conocimiento (paso F1).** La base de producción
+> no trae los datos de prueba: si nadie publicó artículos, el asistente responde que no tiene la
+> información y ofrece un asesor (es el comportamiento correcto, pero no muestra el RAG). Con un
+> artículo publicado, la pregunta del paso B3 obtiene una respuesta basada en él.
+
+### A. Portada y apariencia (1 min)
+
+| Función              | Qué hace                                                       | Pasos para probarla                                                                                                     | Resultado esperado                                                                                                                           | Depende de |
+| -------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| A1. Portada          | Presenta el servicio y las dos entradas                        | Abre <https://atencion.jonarproyectos.com>                                                                              | "Banco Cordillera · Atención al cliente, a cualquier hora", un ejemplo de conversación, **Soy cliente** y **Entrar al panel de asesores →**. | No         |
+| A2. Tema del sistema | Toda la app sigue el modo claro u oscuro del sistema operativo | Cambia el modo de tu sistema (en Windows: Configuración → Personalización → Colores → Elige tu modo) con la app abierta | La página cambia de tema al instante, sin recargar. No hay selector de tema en la app, a propósito.                                          | No         |
+
+### F. Administración, parte 1: contenido para el asistente (3 min)
+
+Inicia sesión como administrador en la ventana B (**Entrar al panel de asesores →**; ver
+[Verificación en dos pasos](#verificación-en-dos-pasos-mfa)).
+
+| Función                     | Qué hace                                                      | Pasos para probarla                                                                                                                                                                                                                                                                                                                                                                      | Resultado esperado                                                                                                                                                                                                | Depende de              |
+| --------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| F1. Base de conocimiento    | El admin crea, edita, publica, archiva o borra artículos      | Barra superior → **Base de conocimiento** → **Nuevo artículo** → **Título** "Horarios de atención" (el **Identificador** se sugiere solo), **Categoría** "oficinas", **Contenido** "Las oficinas atienden de lunes a viernes de 8:00 a 4:00 y los sábados de 9:00 a 12:00.", **Estado** **Publicado** → **Crear artículo**. Para editar, archivar o borrar, abre el artículo de la lista | El artículo aparece en la lista como **Publicado**. Solo lo publicado llega al asistente; el worker lo indexa en segundos. Un borrador o un archivado no se usa, y al cambiar título o contenido sube su versión. | IA (Voyage, embeddings) |
+| F2. Respuestas predefinidas | Textos listos para los asesores, con `{cliente}` y `{asesor}` | **Respuestas** → **Nueva respuesta** → título "Saludo", texto `Hola {cliente}, soy {asesor}. ¿En qué te puedo ayudar?`, atajo `saludo`, deja marcada **Activa** → **Crear**                                                                                                                                                                                                              | Aparece en la lista. La usarás en C5.                                                                                                                                                                             | No                      |
+| F3. Guardas por rol         | La administración es solo para el admin                       | Si tienes cuenta de asesor: entra con ella y escribe en la barra de direcciones `https://atencion.jonarproyectos.com/#/admin/analytics`                                                                                                                                                                                                                                                  | Vuelves al panel con el aviso "Esa sección es solo para administradores". Con la cuenta de admin, la barra muestra **Base de conocimiento · Respuestas · Equipo · Analítica**.                                    | No                      |
+
+### B. El cliente y el asistente de IA (5 min)
+
+En la ventana A: **Soy cliente** → **Iniciar chat** (el nombre es opcional).
+
+| Función                                         | Qué hace                                                      | Pasos para probarla                                                                                          | Resultado esperado                                                                                                                                                                      | Depende de          |
+| ----------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| B1. Sesión anónima                              | El cliente chatea sin registrarse                             | Pulsa **Iniciar chat**                                                                                       | Arriba dice **En línea**, con **Llamar** y **Salir**, y "¿En qué te podemos ayudar?" con tres preguntas de ejemplo.                                                                     | No                  |
+| B2. Preguntas de ejemplo                        | Ayudan a empezar sin enviar nada solo                         | Haz clic en "¿Cuál es el horario de las oficinas?"                                                           | El texto se **escribe** en la caja de mensaje, pero no se envía hasta que pulses **Enviar**.                                                                                            | No                  |
+| B3. Respuesta con la base de conocimiento (RAG) | La IA responde solo con lo publicado                          | Pulsa **Enviar** con la pregunta del horario                                                                 | En unos segundos responde el **Asistente virtual** con el horario del artículo de F1. Sin ese artículo, dice que no tiene el dato y ofrece un asesor: no inventa.                       | IA (Claude, Voyage) |
+| B4. Sin datos de cuentas                        | La IA no tiene acceso a saldos ni movimientos                 | Escribe "¿cuál es mi saldo?"                                                                                 | Explica que no puede ver cuentas y orienta (o, si insistes varias veces sin apoyo en la base, escala a un asesor).                                                                      | IA (Claude)         |
+| B5. Aviso local de urgencia                     | Mientras escribes, un Web Worker detecta palabras de urgencia | Escribe, **sin enviar**, "No reconozco un cargo de $450.000 en mi tarjeta"                                   | Aparece "Esto se ve urgente: si hay un cargo que no reconoces, te conectamos más rápido con un asesor." Es solo un aviso en tu navegador: quien decide es el servidor.                  | No                  |
+| B6. Escalamiento por posible fraude             | El motor escala con prioridad urgente                         | Pulsa **Enviar** con ese mensaje                                                                             | Un mensaje de seguridad (bloquear la tarjeta) y que te comunica con un asesor; arriba: "Te estamos comunicando con un asesor…". En la ventana B el caso aparece **sin recargar** (C2).  | IA (Claude)         |
+| B7. Adjuntar un archivo                         | El cliente envía una imagen o un PDF                          | **Adjuntar** → elige un PDF → escribe "¿me explicas este cargo?" → **Enviar**. Luego **Adjuntar** → una foto | Antes de enviar ves la vista previa con nombre, tamaño y **Quitar**. Se envía como una tarjeta con **Descargar**; la foto se ve en el chat (se sube reducida y sin datos de ubicación). | Archivos (R2)       |
+| B8. Archivo no permitido                        | Solo imágenes PNG, JPEG o WebP y PDF de hasta 5 MB            | **Adjuntar** → elige un `.txt` o un `.gif`                                                                   | "Solo puedes adjuntar imágenes (PNG, JPEG, WebP) o documentos PDF." y no se envía nada.                                                                                                 | No                  |
+
+La IA nunca lee los adjuntos: solo recibe la señal de que el cliente adjuntó un archivo y de qué
+tipo. Si envías un PDF sin comentario a una conversación que atiende la IA, te pedirá que describas lo
+que muestra.
+
+### C. El panel del asesor y el tiempo real (5 min)
+
+En la ventana B (como asesor, o como admin si no tienes cuenta de asesor).
+
+| Función                                   | Qué hace                                                                 | Pasos para probarla                                                                                           | Resultado esperado                                                                                                                                                                                    | Depende de    |
+| ----------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| C1. Disponibilidad                        | El asesor indica si recibe casos                                         | Arriba, **Mi disponibilidad** → **Disponible**                                                                | Queda marcada. Los avisos de casos nuevos van a los asesores disponibles y con cupo.                                                                                                                  | No            |
+| C2. Cola en tiempo real con prioridad     | Los casos escalados llegan sin recargar, el más urgente primero          | Mira la pestaña **Cola** después de B6                                                                        | **Cola (1)** con el cliente, la prioridad legible (un posible fraude suele quedar **Urgente · 90**; pedir un asesor, **Alta · 60**), el motivo y el último mensaje; un aviso "Nuevo caso en la cola". | No            |
+| C3. Leer antes de tomar                   | El asesor ve el historial completo antes de comprometerse                | Haz clic en el caso                                                                                           | Se abre con estado **En espera de asesor**, la intención y el ánimo de cada mensaje del cliente (por ejemplo "Posible fraude · Negativo") y el botón **Tomar caso**. Aún no puedes responder.         | No            |
+| C4. Tomar el caso                         | Asignación atómica: si dos asesores lo toman a la vez, gana uno          | **Tomar caso**                                                                                                | Pasa a **Mis casos (1)**, estado **En atención** · "Lo atiendes tú". En la ventana A: "Te atiende un asesor de Banco Cordillera" y "… se unió a la conversación".                                     | No            |
+| C5. Responder y respuestas predefinidas   | Mensajes del asesor al cliente; plantillas con nombres                   | Botón **Respuestas** → busca `saludo` → haz clic. Revisa el texto y pulsa **Enviar** (o Enter)                | La plantilla se escribe con los nombres reemplazados **sin enviarse sola**. Al enviar, aparece al instante en la ventana A como "… · Asesor".                                                         | No            |
+| C6. El cliente responde en vivo           | Tiempo real en los dos sentidos                                          | En la ventana A escribe "gracias, ¿qué hago con la tarjeta?" → **Enviar**                                     | Aparece en el panel sin recargar, con su intención y ánimo.                                                                                                                                           | IA (Claude)   |
+| C7. Adjuntos del asesor y descarga        | El asesor ve y descarga lo del cliente y adjunta lo suyo                 | En el caso, **Descargar** en la tarjeta del PDF de B7; luego **Adjuntar** junto a **Respuestas** → un archivo | El PDF se descarga. El adjunto del asesor aparece en la ventana A.                                                                                                                                    | Archivos (R2) |
+| C8. Cerrar el caso                        | Termina la conversación y resuelve el escalamiento                       | **Cerrar caso**                                                                                               | El caso queda **Cerrada** y sale de **Mis casos**. En la ventana A: "La conversación terminó" y **Nueva conversación**.                                                                               | No            |
+| C9. Cupo por asesor                       | Un asesor atiende como máximo 3 casos a la vez (configurable por cuenta) | Con 3 casos en **Mis casos**, intenta tomar un cuarto                                                         | "Ya atiendes 3 conversaciones, tu máximo. Cierra una antes de tomar otra."                                                                                                                            | No            |
+| C10. Máximo de conversaciones del cliente | Un cliente tiene como máximo 3 abiertas                                  | En la ventana A, con 3 conversaciones abiertas, pulsa **Nueva conversación**                                  | "Ya tienes 3 conversaciones abiertas. Continúa en una de ellas."                                                                                                                                      | No            |
+
+### D. Llamada de voz (5 min)
+
+Necesitas micrófono y altavoces. En la ventana A, con una conversación nueva:
+
+| Función                           | Qué hace                                                                          | Pasos para probarla                                                                                 | Resultado esperado                                                                                                                                                                      | Depende de         |
+| --------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| D1. Consentimiento                | Sin aceptar el aviso de privacidad no hay llamada                                 | **Llamar**                                                                                          | Aparece el aviso (qué se transcribe, que no se graba el audio, cuánto tiempo se guarda). **Aceptar y llamar** está deshabilitado hasta marcar **Leí y acepto**.                         | No                 |
+| D2. Permiso del micrófono         | Sin micrófono no se crea la llamada                                               | Marca **Leí y acepto** → **Aceptar y llamar** → el navegador pide el micrófono → **Permitir**       | Barra de llamada oscura con **LLAMADA EN CURSO**. Si niegas el permiso: "No diste permiso para usar el micrófono…" y no se crea ninguna llamada.                                        | No                 |
+| D3. Hablar con la IA por voz      | El audio pasa a texto, entra al mismo motor del chat y la respuesta vuelve en voz | Di despacio "¿Cuál es el horario de atención de las oficinas?" y espera                             | Tu frase aparece transcrita en el chat como turno de voz y escuchas la respuesta del asistente; la **forma de onda** se mueve con tu voz. **Interrumpir** corta la respuesta hablada.   | Voz (Deepgram), IA |
+| D4. Silenciar                     | Deja de enviar audio                                                              | **Silenciar**                                                                                       | La forma de onda queda plana y atenuada; lo que digas no se transcribe hasta que vuelvas a activar el micrófono.                                                                        | No                 |
+| D5. Escalar por voz               | Las mismas reglas que el texto                                                    | Di "Quiero hablar con un asesor"                                                                    | La llamada queda **en espera de asesor**: el borde de la barra se llena de color menta una sola vez. En la ventana B el caso aparece en la cola con la llamada activa.                  | Voz (Deepgram), IA |
+| D6. El asesor se une a la llamada | Toma el caso y habla con el cliente por WebRTC, con la transcripción en vivo      | En la ventana B abre el caso → **Unirse a la llamada** (el navegador pide el micrófono también ahí) | Las dos barras muestran **ASESOR CONECTADO**; lo que dice el cliente aparece transcrito en vivo en el panel. Usa audífonos si las dos ventanas están en el mismo equipo (evita el eco). | Voz (Deepgram)     |
+| D7. Salir o colgar                | El asesor deja la llamada o la termina; el cliente cuelga                         | En el panel **Salir de la llamada**, o en la ventana A **Colgar**                                   | La llamada termina en las dos ventanas y el micrófono se apaga (el indicador del navegador desaparece). La transcripción queda en la conversación.                                      | No                 |
+
+### E. Cuenta del asesor (4 min)
+
+En la ventana B, clic en tu nombre (arriba a la derecha) → **Mi perfil**.
+
+| Función                       | Qué hace                                                             | Pasos para probarla                                                                                   | Resultado esperado                                                                                                                                                         | Depende de    |
+| ----------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| E1. Menú de usuario           | Acceso a **Mi perfil** y **Salir** en todas las pantallas del equipo | Clic en tu nombre; prueba también con el teclado (Tab hasta el botón, Enter, Escape)                  | Muestra tu rol y correo, **Mi perfil** y **Salir**. Escape lo cierra y devuelve el foco al botón.                                                                          | No            |
+| E2. Datos y foto de perfil    | Nombre, teléfono y foto recortada                                    | Cambia el teléfono → **Guardar**. **Elegir una foto** → acerca y encuadra → **Guardar foto**          | Se guarda; la foto aparece en el menú. Solo se sube el recorte de 256 × 256 px.                                                                                            | Archivos (R2) |
+| E3. Sesiones activas          | Ver y cerrar sesiones abiertas en otros dispositivos                 | Entra con la misma cuenta en otro navegador. En el primero: **Sesiones activas**                      | Cada sesión con navegador, sistema, **ubicación aproximada** y fechas; la tuya dice **Esta sesión**. **Cerrar sesión en los demás dispositivos** saca al otro navegador.   | No            |
+| E4. Verificación en dos pasos | Activar o desactivar la MFA y regenerar códigos de respaldo          | Como asesor: **Verificación en dos pasos → Activar** y sigue el QR. Luego **Salir** y vuelve a entrar | Tras la contraseña se pide el código. "El código no es correcto" con un código errado; un código de respaldo funciona una sola vez.                                        | No            |
+| E5. Cambiar la contraseña     | Pide la actual y aplica la política                                  | **Contraseña** → actual, nueva de 12+ caracteres dos veces → **Cambiar contraseña**                   | Confirmación. Con una contraseña que contiene tu nombre o es muy común, explica qué falla. Las demás sesiones se cierran.                                                  | No            |
+| E6. Cambiar el correo         | Confirma la dirección nueva con un enlace                            | **Correo** → correo nuevo y tu contraseña → **Enviar enlace de confirmación**                         | Llega un enlace al correo nuevo (vence en 15 minutos) y un aviso al anterior; el cambio aplica al abrir el enlace.                                                         | Correo (SES)  |
+| E7. Recuperar la contraseña   | Enlace de un solo uso por correo, sin revelar si la cuenta existe    | **Salir** → **¿Olvidaste tu contraseña?** → tu correo → **Enviar enlace**                             | El mismo mensaje exista o no la cuenta. El correo trae un enlace (vence en 15 minutos) para elegir la contraseña nueva; usado una vez, el mismo enlace dice que ya se usó. | Correo (SES)  |
+| E8. Descargar mis datos       | Exporta lo que el sistema guarda de ti                               | **Tus datos personales → Descargar mis datos**                                                        | Se descarga un JSON con perfil, sesiones y actividad, sin secretos ni contenido de clientes.                                                                               | No            |
+| E9. Salir                     | Cierra la sesión, también en las otras pestañas                      | Abre el panel en dos pestañas y pulsa **Salir** en una                                                | Las dos quedan en el inicio de sesión.                                                                                                                                     | No            |
+
+### F. Administración, parte 2 (3 min)
+
+Como administrador:
+
+| Función                                        | Qué hace                                                             | Pasos para probarla                                                                                                                                    | Resultado esperado                                                                                                                                                                                              | Depende de   |
+| ---------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| F4. Invitar a un asesor                        | La única forma de crear cuentas del equipo (no hay registro público) | **Equipo** → **Invitar asesor** → nombre, un correo tuyo verificado por el estudiante y rol **Asesor** → **Enviar invitación**                         | Aparece **Invitación pendiente · vence …** (72 horas) con **Reenviar** y **Cancelar**. El enlace no se muestra en pantalla: solo llega por correo.                                                              | Correo (SES) |
+| F5. Completar la cuenta invitada               | La persona invitada elige su contraseña                              | Abre el enlace del correo en una ventana de incógnito → **Completa tu cuenta** → contraseña de 12+ caracteres                                          | "Tu cuenta está lista" y entra al panel. Si abres el mismo enlace otra vez: **Invitación no válida**. Una invitación de administrador pasa obligatoriamente a activar la MFA.                                   | Correo (SES) |
+| F6. Reenviar o cancelar una invitación         | Invalida el enlace anterior / borra la cuenta pendiente              | En una invitación pendiente: **Reenviar**, o **Cancelar** (pide confirmación)                                                                          | Reenviar: llega un enlace nuevo y el anterior deja de servir. Cancelar: la fila desaparece.                                                                                                                     | Correo (SES) |
+| F7. Reasignar casos                            | Pasa los casos en curso de un asesor a otro                          | Con un caso tomado por un asesor: en **Equipo**, su fila muestra "1 caso(s) en curso" → **Reasignar 1 caso(s)** → elige a otra persona → **Reasignar** | El caso pasa al otro asesor y en el chat del cliente aparece que la otra persona continúa la conversación.                                                                                                      | No           |
+| F8. Exportar y eliminar la cuenta de un asesor | Derecho de acceso y de supresión de datos personales                 | En la fila de un asesor de prueba: **Exportar datos**; luego **Eliminar cuenta** (si tiene casos, primero hay que reasignarlos) → confirma             | Se descarga su JSON. Tras confirmar, la fila queda como cuenta eliminada (anonimizada): se borran sus datos personales y se conservan los registros de los casos. **No lo hagas con una cuenta que necesites.** | No           |
+| F9. Analítica                                  | Métricas del servicio con su tabla de datos                          | **Analítica** → cambia el **Periodo** (Últimas 24 h, 7, 30 o 90 días) → **Ver datos**                                                                  | Tiempo medio y mediana de resolución, tasa de escalamiento, CSAT con el rótulo **SIMULADO** y conversaciones por hora del día (hora de Bogotá). Cada barra se enfoca con Tab y dice su valor.                   | No           |
+| F10. Desactivar una respuesta predefinida      | Las inactivas no las ven los asesores                                | **Respuestas** → abre "Saludo" → desmarca **Activa** → guarda. En el panel, **Respuestas** → busca `saludo`                                            | Ya no aparece para los asesores; en la administración figura como **Desactivada**.                                                                                                                              | No           |
+
+### G. Robustez, seguridad y operación (2 min, opcional)
+
+| Función                          | Qué hace                                                | Pasos para probarla                                                                                                            | Resultado esperado                                                                                                                                                                                    | Depende de |
+| -------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| G1. Sin conexión y reintento     | Avisos de conectividad y mensajes que no se pierden     | En el chat, F12 → **Network** → **Offline**. Envía un mensaje. Vuelve a **No throttling** y pulsa **Reintentar** en el mensaje | "Sin conexión a internet…"; el mensaje queda "No se envió." con **Reintentar**; al volver: "Conexión restablecida." y el mensaje se envía una sola vez.                                               | No         |
+| G2. Página sin conexión          | El Service Worker sirve una página propia si no hay red | Con la red en **Offline**, recarga la portada                                                                                  | La portada carga igual desde la caché del Service Worker (si la caché está vacía, una página propia de "sin conexión"), en vez del error del navegador. Las conversaciones nunca se guardan en caché. | No         |
+| G3. Ningún token en el navegador | Las sesiones viven en cookies httpOnly y en memoria     | F12 → **Application** → Local Storage y Session Storage                                                                        | Ningún token de sesión guardado: viven en cookies httpOnly de la API y, el del asesor, solo en memoria.                                                                                               | No         |
+| G4. Tiempo real por WebSocket    | La app recibe eventos por `wss://api-atencion…`         | F12 → **Network** → filtro **WS** con el panel abierto                                                                         | Una conexión a `wss://api-atencion.jonarproyectos.com/ws` que recibe mensajes cuando cambia la cola.                                                                                                  | No         |
+| G5. Salud del servicio           | Sondas para la plataforma de despliegue                 | Abre <https://api-atencion.jonarproyectos.com/health> y `/ready`                                                               | `/health`: `{"status":"ok",…}`. `/ready`: base de datos y Redis en `ok`.                                                                                                                              | No         |
+| G6. Aislamiento entre clientes   | Un cliente no ve conversaciones de otro                 | Abre el chat en otro navegador (otra sesión anónima)                                                                           | No aparece nada de la conversación anterior. (El aislamiento entre asesores y entre clientes lo prueban `authorization.test.ts` y `widget.test.ts`.)                                                  | No         |
+
+### Funciones sin pantalla (se evalúan por los tests o la documentación)
+
+| Función                                                                                       | Dónde está                                                                              | Cómo se comprueba                                                                                          |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Desactivar una cuenta o cambiar su rol (cierra sus sesiones)                                  | `PATCH /api/staff/:id` (solo admin)                                                     | `tests/integration/kbAndStaff.test.ts`                                                                     |
+| Ver todas las conversaciones (admin)                                                          | `GET /api/conversations?scope=all`                                                      | `tests/integration/authorization.test.ts`                                                                  |
+| Barrido de llamadas abandonadas (cada minuto) y purga de transcripciones vencidas (cada hora) | Worker, cola `voice-maintenance`                                                        | `tests/integration/voice.test.ts` · [docs/privacy-voice.md](docs/privacy-voice.md)                         |
+| Límites de uso (por IP, sesión, usuario, tokens de IA y segundos de voz)                      | Redis; tabla en la [referencia técnica](docs/referencia-tecnica.md#rate-limiting-redis) | `tests/integration/auth.test.ts`, `widget.test.ts`, `engine.test.ts` y `voice.test.ts`                     |
+| Métricas Prometheus                                                                           | `GET /metrics` con token                                                                | `tests/integration/observability.test.ts`                                                                  |
+| Auditoría (inicios de sesión, cambios del equipo y de la base, acciones sobre casos)          | Tabla `audit_log`                                                                       | Tests de integración de cada módulo                                                                        |
+| Scripts de operación: primer admin, quitar la MFA, reindexar el RAG, purgas                   | `npm run admin:crear`, `staff:reset-mfa`, `kb:reindex`, `voice:purge`, `storage:purge`  | [Referencia técnica: scripts](docs/referencia-tecnica.md#scripts) · `tests/integration/crearAdmin.test.ts` |
+| Apagado ordenado (termina lo que está en curso antes de salir)                                | `src/lifecycle/shutdown.ts`, `VoiceServer.close()`                                      | `tests/unit/shutdown.test.ts`, `tests/integration/voice.test.ts`                                           |
+
+## 7. Pruebas automatizadas
+
+Necesitan la opción local (Docker en marcha con PostgreSQL y Redis de `atencion-ia-database`). Las
+pruebas del backend crean su propia base desechable (`atencion_ia_test`) aplicando las migraciones
+reales, así que no tocan los datos de desarrollo.
+
+| Repositorio            | Comando                                                   | Qué cubre                                                                                                                                                                                                                                                                                                          | Resultado esperado                                                                |
+| ---------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `atencion-ia-backend`  | `scripts\verify.bat` (Windows) o `bash scripts/verify.sh` | Lint, tipos, tests unitarios y de integración y build. Integración contra la base real: sesión completa, CSRF, límites de uso, aislamiento entre asesores y entre clientes, carreras, motor de IA y escalamiento, aislamiento del RAG, WebSocket real, voz completa, MFA, invitaciones, adjuntos y administración. | `Tests 467 passed (467)` en 39 archivos y `Verificación completa: todo en orden.` |
+| `atencion-ia-backend`  | `npm run test:shuffle`                                    | Los mismos tests en orden aleatorio (detecta dependencias ocultas entre tests)                                                                                                                                                                                                                                     | Todos pasan con cualquier semilla.                                                |
+| `atencion-ia-backend`  | `npm run test:mutations`                                  | Rompe a propósito 99 reglas críticas (aislamiento del RAG, permisos, consentimiento, MFA, adjuntos…) y exige que algún test falle                                                                                                                                                                                  | `99/99 mutaciones detectadas.`                                                    |
+| `atencion-ia-frontend` | `npm test`                                                | Render seguro (XSS), sesión, WebSocket con reconexión, chat, panel, voz, Service Worker, administración, estados de la interfaz y contraste de colores medido (WCAG)                                                                                                                                               | `Tests 416 passed (416)` en 24 archivos.                                          |
+| `atencion-ia-frontend` | `npm run test:mutations`                                  | 124 reglas críticas del frontend rotas a propósito                                                                                                                                                                                                                                                                 | `124/124 mutaciones detectadas.`                                                  |
+| `atencion-ia-frontend` | `scripts\e2e.bat`                                         | Playwright contra el sistema completo en un entorno aislado: flujo de texto, llamada de voz con WebRTC, adjuntos, invitación, tema del sistema y API en otro origen; incluye accesibilidad con axe                                                                                                                 | Todos los escenarios en verde.                                                    |
+| `atencion-ia-database` | `scripts\migrate.bat` y `scripts\test.bat` (o sus `.sh`)  | Migraciones repetibles y 7 archivos de pruebas del esquema: reglas de la base, aislamiento del RAG, voz, identidad, respuestas predefinidas, adjuntos e invitaciones                                                                                                                                               | `Todas las pruebas del esquema pasaron.`                                          |
+
+La **CI** (GitHub Actions) corre todo esto en cada `push` de los tres repositorios, más `npm audit` y
+gitleaks (búsqueda de secretos en todo el historial). Las excepciones vigentes de `npm audit` están
+justificadas en el [ADR 0012](docs/adr/0012-excepciones-npm-audit-octubre-2026.md). Hay además
+pruebas de carga con su informe: [docs/load-test-report.md](docs/load-test-report.md).
+
+## 8. Limitaciones conocidas y decisiones de diseño
+
+- **Correo en modo de pruebas.** Amazon SES está en modo _sandbox_: solo entrega a direcciones
+  verificadas por el estudiante. Las invitaciones, la recuperación de contraseña y el cambio de
+  correo solo llegan a esas direcciones.
+- **Base de conocimiento de producción.** Los datos de prueba (seed) no se cargan en producción. Sin
+  artículos publicados, el asistente responde que no tiene la información y ofrece un asesor. El
+  umbral de similitud del RAG con Voyage (`RAG_MIN_SCORE`, 0,45 por defecto) no está calibrado con
+  datos reales ([docs/rag.md](docs/rag.md)).
+- **Respuestas de la IA no deterministas.** En producción las redacta Claude: el texto exacto cambia
+  de una vez a otra. Lo que no cambia son las reglas (qué escala, qué datos ve la IA). En local, la IA
+  simulada siempre responde igual.
+- **Cuotas de uso.** Cada cliente tiene un tope diario de tokens de IA (60 000 por defecto) y de
+  segundos de voz (1 800 por día, 900 por llamada); una sesión del chat envía hasta 12 mensajes por
+  minuto y crea hasta 6 llamadas por hora. Al pasar el tope aparece "Alcanzaste el límite diario de
+  consultas al asistente…" (o "…de llamadas…"): la conversación puede seguir con un asesor o por
+  chat.
+- **Voz entre redes distintas.** No hay servidor TURN configurado (`ICE_SERVERS=[]`). La llamada con
+  la IA funciona desde cualquier red porque el audio pasa por el servidor, pero el audio directo
+  entre el cliente y el asesor (WebRTC) solo conecta si los dos navegadores están en el mismo equipo
+  o en la misma red.
+- **CSAT simulado.** No existe una encuesta de satisfacción: la analítica muestra un CSAT calculado
+  con una regla fija y lo rotula **SIMULADO** ([docs/analytics.md](docs/analytics.md)).
+- **Ubicación de las sesiones.** Se calcula solo con una base de datos local de rangos de IP (la IP
+  nunca sale del servidor). Sin esa base configurada, las sesiones remotas aparecen sin ciudad.
+- **Sin registro público ni selector de tema.** Las cuentas del equipo solo nacen por invitación, y el
+  tema lo decide el sistema operativo: ambas son decisiones de diseño, no faltantes.
+- **Mensajes no reenviados.** Lo que llega por WebSocket mientras el navegador está desconectado no se
+  reenvía; al reconectar, la app vuelve a pedir el historial por REST.
+
+## 9. Solución de problemas
+
+| Síntoma                                                        | Qué hacer                                                                                                                                                                                             |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| La página no carga                                             | Abre <https://api-atencion.jonarproyectos.com/ready>. Si no responde, el servicio está caído: avisa al estudiante. Si responde, recarga con Ctrl+F5 (o prueba en incógnito).                          |
+| "Desconectado" o "Reconectando…" que no se va                  | Revisa tu conexión. La app reintenta sola; si una red corporativa bloquea WebSockets, prueba otra red.                                                                                                |
+| La sesión expiró o el panel vuelve al inicio de sesión         | Vuelve a entrar. Pasa si cerraste sesión en otra pestaña, si se cerraron tus sesiones desde **Mi perfil** o tras 7 días sin usarla.                                                                   |
+| No llega el correo (invitación, recuperación)                  | Revisa spam. El correo solo entrega a direcciones verificadas ([Limitaciones](#8-limitaciones-conocidas-y-decisiones-de-diseño)). Pide al estudiante un **Reenviar**.                                 |
+| "Invitación no válida"                                         | El enlace venció (72 h), ya se usó o se reenvió uno nuevo. Pide otra invitación.                                                                                                                      |
+| El asistente tarda o responde que no tiene la información      | La primera respuesta puede tardar unos segundos (IA real). Si dice que no tiene el dato, publica un artículo sobre el tema (F1) y vuelve a preguntar.                                                 |
+| "Alcanzaste el límite diario…"                                 | Es el tope de uso por cliente. Pulsa **Salir** e **Iniciar chat** de nuevo, o escribe "asesor" para seguir con una persona.                                                                           |
+| El caso escalado no aparece en el panel                        | Revisa que estés en la pestaña **Cola** y con **Mi disponibilidad** en **Disponible**. Un asesor solo ve la cola y sus propios casos.                                                                 |
+| No se puede llamar: permiso del micrófono                      | Candado de la barra de direcciones → **Micrófono → Permitir** y recarga. Revisa que el sistema operativo permita el micrófono al navegador.                                                           |
+| El asesor se une pero no se escuchan                           | Sin servidor TURN, el audio directo solo conecta en el mismo equipo o red ([Limitaciones](#8-limitaciones-conocidas-y-decisiones-de-diseño)). La transcripción sí llega.                              |
+| Eco o pitido en la llamada                                     | Las dos ventanas en el mismo equipo se escuchan entre sí: usa audífonos.                                                                                                                              |
+| "Ya atiendes 3 conversaciones, tu máximo"                      | Cierra un caso en **Mis casos**.                                                                                                                                                                      |
+| "Ya tienes 3 conversaciones abiertas"                          | Sigue en una de ellas, o pide a un asesor que cierre una.                                                                                                                                             |
+| El código de verificación no funciona                          | Activa la hora automática del teléfono o usa un código de respaldo.                                                                                                                                   |
+| Local: la API dice `Configuración inválida`                    | El mensaje indica qué variable de `.env` falta o es insegura (por ejemplo `JWT_SECRET` con menos de 32 caracteres).                                                                                   |
+| Local: `Can't reach database server at localhost:5434`         | Docker no está en marcha o falta `docker compose up -d` en `atencion-ia-database`.                                                                                                                    |
+| Local: el asistente responde "No encontré información…" a todo | Falta indexar la base de conocimiento: `npm run kb:reindex` en `atencion-ia-backend`.                                                                                                                 |
+| Local: no llega ningún correo                                  | En local no se envían: se guardan en la base. Léelos con `docker exec -it atencion_ia_postgres psql -U postgres -d atencion_ia -At -c "SELECT body_text FROM email_outbox ORDER BY id DESC LIMIT 1"`. |
+| Local: `prisma generate` falla con `EPERM`                     | La API o el worker tienen abierta la librería de Prisma: detenlos y repite.                                                                                                                           |
+
+## 10. Estructura del repositorio
+
+```
+atencion-ia-backend/
+├── src/
+│   ├── server.ts · app.ts      # arranque, middlewares de seguridad y apagado ordenado
+│   ├── config/                 # variables de entorno validadas (zod), Prisma, Redis, logger
+│   ├── middlewares/            # autenticación, roles, CSRF, validación, límites de uso, errores
+│   ├── modules/                # una carpeta por área: rutas → controlador → servicio
+│   │   ├── auth/ · profile/    # login, MFA, sesiones, recuperación y perfil
+│   │   ├── staff/              # equipo e invitaciones
+│   │   ├── widget/             # sesión anónima y conversaciones del cliente
+│   │   ├── conversations/      # cola, tomar, responder, cerrar, reasignar (y quién ve qué)
+│   │   ├── engine/ · rag/      # motor conversacional, reglas de escalamiento, búsqueda en la KB
+│   │   ├── kb/ · canned/       # base de conocimiento y respuestas predefinidas
+│   │   ├── voice/              # llamadas, consentimiento, transcripción y retención
+│   │   ├── attachments/        # validación y descarga de adjuntos
+│   │   └── analytics/          # métricas de la administración
+│   ├── realtime/               # WebSocket de eventos (/ws) y de voz (/ws/voice)
+│   ├── services/               # proveedores intercambiables: ai, voice, email, storage, geo, audit
+│   ├── queues/ · workers/      # colas BullMQ y el worker
+│   ├── observability/          # /health, /ready, métricas
+│   ├── lifecycle/              # apagado ordenado
+│   ├── scripts/                # operación: primer admin, reindexar, quitar MFA, purgas, demo de voz
+│   └── utils/
+├── tests/unit · tests/integration
+├── prisma/schema.prisma        # cliente de base de datos (el esquema lo manda atencion-ia-database)
+├── docs/                       # referencia técnica, ADR, RAG, amenazas, privacidad, carga, demos
+├── loadtests/                  # pruebas de carga
+├── scripts/                    # verify, pruebas de mutación
+└── Dockerfile
 ```
 
-Recrean una base `atencion_ia_test` aplicando las migraciones **reales** del repo hermano
-(con sus CHECKs e índices parciales). Redis y las colas se simulan. 429 tests en 35 archivos: unitarios (política de
-contraseñas, bloqueo, tokens, acceso, versionado de la KB, paginación, redacción de logs,
-apagado, reglas de escalamiento, proveedor mock, adaptadores de Claude y Voyage con clientes
-simulados, prompt injection, fragmentación) y de integración (sesión completa, CSRF, rate limit,
-aislamiento entre agentes y entre clientes, carreras, idempotencia, KB, staff, motor
-conversacional, aislamiento del RAG, indexación, avisos, sondas, métricas, sesión del widget
-por cookie con CSRF y WebSocket real: Origin, autenticación, qué recibe cada destinatario y cierre al vencer)
-y de voz (proveedores mock y Deepgram con dobles, llamada completa con el motor real, aislamiento de la
-señalización entre llamadas e instancias, permisos, topes, gracia, barrido y purga). Fase 7: TOTP y
-códigos de respaldo, enlaces de un solo uso, bloqueo, sesiones con IP truncada, perfil y foto,
-anonimización y exportación, guardas por rol de la administración, analítica, respuestas
-predefinidas y adjuntos (validación del archivo, PDF con contenido activo, y que la IA nunca reciba
-el contenido ni el nombre del archivo). Bloque F: invitaciones (enlace de un solo uso, vencido,
-reenviado, cancelado, inventado; cuenta pendiente que no entra ni recibe recuperación; admin con MFA
-obligatoria; dos envíos simultáneos → uno solo completa la cuenta).
+Los otros repositorios describen su estructura en su propio README:
+[atencion-ia-frontend](https://github.com/Jonar519/atencion-ia-frontend#readme) y
+[atencion-ia-database](https://github.com/Jonar519/atencion-ia-database#readme).
 
-Además: `npm run test:shuffle` (orden aleatorio: sin dependencias ocultas entre tests) y
-`npm run test:mutations` (99/99 reglas críticas rotas a propósito son detectadas).
+## 11. Glosario
 
-**CI** (`.github/workflows/ci.yml`, en cada push):
-
-- lint, typecheck, tests, tests en orden aleatorio y build contra un Postgres de servicio, con las
-  migraciones del repo `atencion-ia-database`;
-- las pruebas de mutación, en un job aparte;
-- `npm audit` de las dependencias de producción y gitleaks sobre todo el historial (excepciones
-  vigentes, con fecha de revisión: [ADR 0012](docs/adr/0012-excepciones-npm-audit-octubre-2026.md)).
-
-**Carga:** [docs/load-test-report.md](docs/load-test-report.md). Con una IA de 300 ms por llamada,
-el turno pasó de ~1050 a ~732 ms y el throughput de ~45 a ~67 req/s al paralelizar la
-clasificación y la búsqueda en la KB. Un perfil de CPU y el log de SQL explican el resto.
-
-**Seguridad:** [docs/threat-model.md](docs/threat-model.md) (STRIDE). Cada amenaza cita su
-mitigación, el test o la mutación que la cubre y el riesgo que queda.
-
-## Probarlo a mano (cmd.exe, con el seed cargado)
-
-```bat
-curl -s -c %TEMP%\laura-cookies.txt -H "Content-Type: application/json" -d "{\"email\":\"laura@cordillera.example\",\"password\":\"Password123!\"}" http://localhost:4100/api/auth/login
-```
-
-Copia el `accessToken` de la respuesta y:
-
-```bat
-set TOKEN=pega_aqui_el_token
-:: Su conversación (200) y la de Diego (404)
-curl -s -H "Authorization: Bearer %TOKEN%" http://localhost:4100/api/conversations/c0000000-0000-4000-8000-000000000003
-curl -s -H "Authorization: Bearer %TOKEN%" http://localhost:4100/api/conversations/c0000000-0000-4000-8000-000000000007
-```
-
-Recorrido completo de la Fase 7 (identidad, administración, adjuntos, llamada en vivo y estados de la
-interfaz): [docs/demo-fase7.md](docs/demo-fase7.md).
-
-Cuentas del seed: `admin@`, `laura@`, `diego@cordillera.example` (contraseña
-`Password123!`; ver el README de `atencion-ia-database`).
-
-## Prisma: lo que no está en `schema.prisma`
-
-`schema.prisma` se obtiene con `db pull` y los modelos se renombraron a PascalCase con
-`@@map`/`@map`. Un nuevo `db pull` conserva esos renombres y los comentarios `///`, pero
-**borra** los `//` (medido), por eso lo importante está aquí:
-
-- CHECKs, índices únicos **parciales**, FKs compuestas y triggers viven solo en la base.
-- `calls.duration_seconds` es una columna calculada: solo lectura.
-- `kb_chunks.embedding` (`vector(1024)`) se usa con SQL crudo.
-- **Nunca** `prisma migrate` ni `prisma db push` (ver [ADR 0001](docs/adr/0001-prisma-solo-como-cliente.md)).
-
-## Decisiones
-
-Ver [`docs/adr/`](docs/adr/README.md).
+| Término                             | Qué significa aquí                                                                                                                     |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **API REST**                        | La interfaz del servidor: direcciones (`/api/...`) que el navegador llama con métodos HTTP (GET, POST…) y que responden JSON.          |
+| **Base de conocimiento (KB)**       | Los artículos del banco que el asistente puede usar para responder.                                                                    |
+| **Embedding**                       | Una lista de números que representa el significado de un texto; textos parecidos tienen embeddings cercanos.                           |
+| **pgvector**                        | Extensión de PostgreSQL que guarda embeddings y busca los más cercanos.                                                                |
+| **RAG**                             | _Retrieval-Augmented Generation_: antes de responder, se buscan los fragmentos relevantes de la KB y la IA responde solo con ellos.    |
+| **Escalamiento**                    | Pasar una conversación de la IA a una persona, con prioridad y motivo.                                                                 |
+| **WebSocket**                       | Conexión que queda abierta para que el servidor envíe eventos al navegador al instante.                                                |
+| **WebRTC**                          | Tecnología del navegador para enviar audio directamente entre dos navegadores.                                                         |
+| **STUN / TURN**                     | Servidores que ayudan a WebRTC a conectar a través de redes distintas; TURN reenvía el audio cuando la conexión directa no es posible. |
+| **STT / TTS**                       | Voz a texto (_speech-to-text_) y texto a voz (_text-to-speech_).                                                                       |
+| **MFA / verificación en dos pasos** | Además de la contraseña, un código de 6 dígitos que cambia cada 30 segundos en una aplicación del teléfono (TOTP).                     |
+| **Cookie httpOnly**                 | Cookie que el JavaScript de la página no puede leer: protege la sesión si alguien logra inyectar un script (XSS).                      |
+| **CSRF**                            | Ataque en el que otro sitio intenta hacer peticiones con tu sesión; se bloquea exigiendo una cabecera que solo la app envía.           |
+| **XSS**                             | Inyección de código en la página a través de texto de usuario; la app inserta todo texto como texto, nunca como HTML.                  |
+| **Worker / cola**                   | Proceso aparte que ejecuta tareas pendientes (avisos, indexación, purgas) guardadas en una cola de Redis.                              |
+| **Pub/sub**                         | Mecanismo de Redis para que un evento publicado llegue a todas las instancias del servidor.                                            |
+| **Service Worker**                  | Script del navegador que guarda la aplicación en caché para que cargue sin conexión.                                                   |
+| **Web Worker**                      | Hilo aparte del navegador; aquí clasifica la urgencia del texto mientras el cliente escribe.                                           |
+| **Prueba de mutación**              | Se rompe el código a propósito y se comprueba que algún test falle; demuestra que los tests protegen algo.                             |
+| **E2E**                             | Prueba de punta a punta: un navegador automatizado usa la aplicación completa como lo haría una persona.                               |
+| **Readiness (`/ready`)**            | Dirección que responde si el servidor está listo para recibir tráfico (base de datos y Redis disponibles).                             |
+| **ADR**                             | _Architecture Decision Record_: documento corto que registra una decisión técnica, sus alternativas y por qué se eligió.               |
