@@ -21,6 +21,11 @@ explican su parte y enlazan aquí:
 4. [Qué necesita el profesor](#4-qué-necesita-el-profesor)
 5. [Acceso y roles](#5-acceso-y-roles)
 6. [Guía de pruebas función por función](#6-guía-de-pruebas-función-por-función)
+7. [Pruebas automatizadas](#7-pruebas-automatizadas)
+8. [Limitaciones conocidas y decisiones de diseño](#8-limitaciones-conocidas-y-decisiones-de-diseño)
+9. [Solución de problemas](#9-solución-de-problemas)
+10. [Estructura del repositorio](#10-estructura-del-repositorio)
+11. [Glosario](#11-glosario)
 
 ## 1. Qué es el proyecto
 
@@ -506,3 +511,142 @@ Como administrador:
 | Auditoría (inicios de sesión, cambios del equipo y de la base, acciones sobre casos)          | Tabla `audit_log`                                                                       | Tests de integración de cada módulo                                                                        |
 | Scripts de operación: primer admin, quitar la MFA, reindexar el RAG, purgas                   | `npm run admin:crear`, `staff:reset-mfa`, `kb:reindex`, `voice:purge`, `storage:purge`  | [Referencia técnica: scripts](docs/referencia-tecnica.md#scripts) · `tests/integration/crearAdmin.test.ts` |
 | Apagado ordenado (termina lo que está en curso antes de salir)                                | `src/lifecycle/shutdown.ts`, `VoiceServer.close()`                                      | `tests/unit/shutdown.test.ts`, `tests/integration/voice.test.ts`                                           |
+
+## 7. Pruebas automatizadas
+
+Necesitan la opción local (Docker en marcha con PostgreSQL y Redis de `atencion-ia-database`). Las
+pruebas del backend crean su propia base desechable (`atencion_ia_test`) aplicando las migraciones
+reales, así que no tocan los datos de desarrollo.
+
+| Repositorio            | Comando                                                   | Qué cubre                                                                                                                                                                                                                                                                                                          | Resultado esperado                                                                |
+| ---------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `atencion-ia-backend`  | `scripts\verify.bat` (Windows) o `bash scripts/verify.sh` | Lint, tipos, tests unitarios y de integración y build. Integración contra la base real: sesión completa, CSRF, límites de uso, aislamiento entre asesores y entre clientes, carreras, motor de IA y escalamiento, aislamiento del RAG, WebSocket real, voz completa, MFA, invitaciones, adjuntos y administración. | `Tests 467 passed (467)` en 39 archivos y `Verificación completa: todo en orden.` |
+| `atencion-ia-backend`  | `npm run test:shuffle`                                    | Los mismos tests en orden aleatorio (detecta dependencias ocultas entre tests)                                                                                                                                                                                                                                     | Todos pasan con cualquier semilla.                                                |
+| `atencion-ia-backend`  | `npm run test:mutations`                                  | Rompe a propósito 99 reglas críticas (aislamiento del RAG, permisos, consentimiento, MFA, adjuntos…) y exige que algún test falle                                                                                                                                                                                  | `99/99 mutaciones detectadas.`                                                    |
+| `atencion-ia-frontend` | `npm test`                                                | Render seguro (XSS), sesión, WebSocket con reconexión, chat, panel, voz, Service Worker, administración, estados de la interfaz y contraste de colores medido (WCAG)                                                                                                                                               | `Tests 416 passed (416)` en 24 archivos.                                          |
+| `atencion-ia-frontend` | `npm run test:mutations`                                  | 124 reglas críticas del frontend rotas a propósito                                                                                                                                                                                                                                                                 | `124/124 mutaciones detectadas.`                                                  |
+| `atencion-ia-frontend` | `scripts\e2e.bat`                                         | Playwright contra el sistema completo en un entorno aislado: flujo de texto, llamada de voz con WebRTC, adjuntos, invitación, tema del sistema y API en otro origen; incluye accesibilidad con axe                                                                                                                 | Todos los escenarios en verde.                                                    |
+| `atencion-ia-database` | `scripts\migrate.bat` y `scripts\test.bat` (o sus `.sh`)  | Migraciones repetibles y 7 archivos de pruebas del esquema: reglas de la base, aislamiento del RAG, voz, identidad, respuestas predefinidas, adjuntos e invitaciones                                                                                                                                               | `Todas las pruebas del esquema pasaron.`                                          |
+
+La **CI** (GitHub Actions) corre todo esto en cada `push` de los tres repositorios, más `npm audit` y
+gitleaks (búsqueda de secretos en todo el historial). Las excepciones vigentes de `npm audit` están
+justificadas en el [ADR 0012](docs/adr/0012-excepciones-npm-audit-octubre-2026.md). Hay además
+pruebas de carga con su informe: [docs/load-test-report.md](docs/load-test-report.md).
+
+## 8. Limitaciones conocidas y decisiones de diseño
+
+- **Correo en modo de pruebas.** Amazon SES está en modo _sandbox_: solo entrega a direcciones
+  verificadas por el estudiante. Las invitaciones, la recuperación de contraseña y el cambio de
+  correo solo llegan a esas direcciones.
+- **Base de conocimiento de producción.** Los datos de prueba (seed) no se cargan en producción. Sin
+  artículos publicados, el asistente responde que no tiene la información y ofrece un asesor. El
+  umbral de similitud del RAG con Voyage (`RAG_MIN_SCORE`, 0,45 por defecto) no está calibrado con
+  datos reales ([docs/rag.md](docs/rag.md)).
+- **Respuestas de la IA no deterministas.** En producción las redacta Claude: el texto exacto cambia
+  de una vez a otra. Lo que no cambia son las reglas (qué escala, qué datos ve la IA). En local, la IA
+  simulada siempre responde igual.
+- **Cuotas de uso.** Cada cliente tiene un tope diario de tokens de IA (60 000 por defecto) y de
+  segundos de voz (1 800 por día, 900 por llamada); una sesión del chat envía hasta 12 mensajes por
+  minuto y crea hasta 6 llamadas por hora. Al pasar el tope aparece "Alcanzaste el límite diario de
+  consultas al asistente…" (o "…de llamadas…"): la conversación puede seguir con un asesor o por
+  chat.
+- **Voz entre redes distintas.** No hay servidor TURN configurado (`ICE_SERVERS=[]`). La llamada con
+  la IA funciona desde cualquier red porque el audio pasa por el servidor, pero el audio directo
+  entre el cliente y el asesor (WebRTC) solo conecta si los dos navegadores están en el mismo equipo
+  o en la misma red.
+- **CSAT simulado.** No existe una encuesta de satisfacción: la analítica muestra un CSAT calculado
+  con una regla fija y lo rotula **SIMULADO** ([docs/analytics.md](docs/analytics.md)).
+- **Ubicación de las sesiones.** Se calcula solo con una base de datos local de rangos de IP (la IP
+  nunca sale del servidor). Sin esa base configurada, las sesiones remotas aparecen sin ciudad.
+- **Sin registro público ni selector de tema.** Las cuentas del equipo solo nacen por invitación, y el
+  tema lo decide el sistema operativo: ambas son decisiones de diseño, no faltantes.
+- **Mensajes no reenviados.** Lo que llega por WebSocket mientras el navegador está desconectado no se
+  reenvía; al reconectar, la app vuelve a pedir el historial por REST.
+
+## 9. Solución de problemas
+
+| Síntoma                                                        | Qué hacer                                                                                                                                                                                             |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| La página no carga                                             | Abre <https://api-atencion.jonarproyectos.com/ready>. Si no responde, el servicio está caído: avisa al estudiante. Si responde, recarga con Ctrl+F5 (o prueba en incógnito).                          |
+| "Desconectado" o "Reconectando…" que no se va                  | Revisa tu conexión. La app reintenta sola; si una red corporativa bloquea WebSockets, prueba otra red.                                                                                                |
+| La sesión expiró o el panel vuelve al inicio de sesión         | Vuelve a entrar. Pasa si cerraste sesión en otra pestaña, si se cerraron tus sesiones desde **Mi perfil** o tras 7 días sin usarla.                                                                   |
+| No llega el correo (invitación, recuperación)                  | Revisa spam. El correo solo entrega a direcciones verificadas ([Limitaciones](#8-limitaciones-conocidas-y-decisiones-de-diseño)). Pide al estudiante un **Reenviar**.                                 |
+| "Invitación no válida"                                         | El enlace venció (72 h), ya se usó o se reenvió uno nuevo. Pide otra invitación.                                                                                                                      |
+| El asistente tarda o responde que no tiene la información      | La primera respuesta puede tardar unos segundos (IA real). Si dice que no tiene el dato, publica un artículo sobre el tema (F1) y vuelve a preguntar.                                                 |
+| "Alcanzaste el límite diario…"                                 | Es el tope de uso por cliente. Pulsa **Salir** e **Iniciar chat** de nuevo, o escribe "asesor" para seguir con una persona.                                                                           |
+| El caso escalado no aparece en el panel                        | Revisa que estés en la pestaña **Cola** y con **Mi disponibilidad** en **Disponible**. Un asesor solo ve la cola y sus propios casos.                                                                 |
+| No se puede llamar: permiso del micrófono                      | Candado de la barra de direcciones → **Micrófono → Permitir** y recarga. Revisa que el sistema operativo permita el micrófono al navegador.                                                           |
+| El asesor se une pero no se escuchan                           | Sin servidor TURN, el audio directo solo conecta en el mismo equipo o red ([Limitaciones](#8-limitaciones-conocidas-y-decisiones-de-diseño)). La transcripción sí llega.                              |
+| Eco o pitido en la llamada                                     | Las dos ventanas en el mismo equipo se escuchan entre sí: usa audífonos.                                                                                                                              |
+| "Ya atiendes 3 conversaciones, tu máximo"                      | Cierra un caso en **Mis casos**.                                                                                                                                                                      |
+| "Ya tienes 3 conversaciones abiertas"                          | Sigue en una de ellas, o pide a un asesor que cierre una.                                                                                                                                             |
+| El código de verificación no funciona                          | Activa la hora automática del teléfono o usa un código de respaldo.                                                                                                                                   |
+| Local: la API dice `Configuración inválida`                    | El mensaje indica qué variable de `.env` falta o es insegura (por ejemplo `JWT_SECRET` con menos de 32 caracteres).                                                                                   |
+| Local: `Can't reach database server at localhost:5434`         | Docker no está en marcha o falta `docker compose up -d` en `atencion-ia-database`.                                                                                                                    |
+| Local: el asistente responde "No encontré información…" a todo | Falta indexar la base de conocimiento: `npm run kb:reindex` en `atencion-ia-backend`.                                                                                                                 |
+| Local: no llega ningún correo                                  | En local no se envían: se guardan en la base. Léelos con `docker exec -it atencion_ia_postgres psql -U postgres -d atencion_ia -At -c "SELECT body_text FROM email_outbox ORDER BY id DESC LIMIT 1"`. |
+| Local: `prisma generate` falla con `EPERM`                     | La API o el worker tienen abierta la librería de Prisma: detenlos y repite.                                                                                                                           |
+
+## 10. Estructura del repositorio
+
+```
+atencion-ia-backend/
+├── src/
+│   ├── server.ts · app.ts      # arranque, middlewares de seguridad y apagado ordenado
+│   ├── config/                 # variables de entorno validadas (zod), Prisma, Redis, logger
+│   ├── middlewares/            # autenticación, roles, CSRF, validación, límites de uso, errores
+│   ├── modules/                # una carpeta por área: rutas → controlador → servicio
+│   │   ├── auth/ · profile/    # login, MFA, sesiones, recuperación y perfil
+│   │   ├── staff/              # equipo e invitaciones
+│   │   ├── widget/             # sesión anónima y conversaciones del cliente
+│   │   ├── conversations/      # cola, tomar, responder, cerrar, reasignar (y quién ve qué)
+│   │   ├── engine/ · rag/      # motor conversacional, reglas de escalamiento, búsqueda en la KB
+│   │   ├── kb/ · canned/       # base de conocimiento y respuestas predefinidas
+│   │   ├── voice/              # llamadas, consentimiento, transcripción y retención
+│   │   ├── attachments/        # validación y descarga de adjuntos
+│   │   └── analytics/          # métricas de la administración
+│   ├── realtime/               # WebSocket de eventos (/ws) y de voz (/ws/voice)
+│   ├── services/               # proveedores intercambiables: ai, voice, email, storage, geo, audit
+│   ├── queues/ · workers/      # colas BullMQ y el worker
+│   ├── observability/          # /health, /ready, métricas
+│   ├── lifecycle/              # apagado ordenado
+│   ├── scripts/                # operación: primer admin, reindexar, quitar MFA, purgas, demo de voz
+│   └── utils/
+├── tests/unit · tests/integration
+├── prisma/schema.prisma        # cliente de base de datos (el esquema lo manda atencion-ia-database)
+├── docs/                       # referencia técnica, ADR, RAG, amenazas, privacidad, carga, demos
+├── loadtests/                  # pruebas de carga
+├── scripts/                    # verify, pruebas de mutación
+└── Dockerfile
+```
+
+Los otros repositorios describen su estructura en su propio README:
+[atencion-ia-frontend](https://github.com/Jonar519/atencion-ia-frontend#readme) y
+[atencion-ia-database](https://github.com/Jonar519/atencion-ia-database#readme).
+
+## 11. Glosario
+
+| Término                             | Qué significa aquí                                                                                                                     |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **API REST**                        | La interfaz del servidor: direcciones (`/api/...`) que el navegador llama con métodos HTTP (GET, POST…) y que responden JSON.          |
+| **Base de conocimiento (KB)**       | Los artículos del banco que el asistente puede usar para responder.                                                                    |
+| **Embedding**                       | Una lista de números que representa el significado de un texto; textos parecidos tienen embeddings cercanos.                           |
+| **pgvector**                        | Extensión de PostgreSQL que guarda embeddings y busca los más cercanos.                                                                |
+| **RAG**                             | _Retrieval-Augmented Generation_: antes de responder, se buscan los fragmentos relevantes de la KB y la IA responde solo con ellos.    |
+| **Escalamiento**                    | Pasar una conversación de la IA a una persona, con prioridad y motivo.                                                                 |
+| **WebSocket**                       | Conexión que queda abierta para que el servidor envíe eventos al navegador al instante.                                                |
+| **WebRTC**                          | Tecnología del navegador para enviar audio directamente entre dos navegadores.                                                         |
+| **STUN / TURN**                     | Servidores que ayudan a WebRTC a conectar a través de redes distintas; TURN reenvía el audio cuando la conexión directa no es posible. |
+| **STT / TTS**                       | Voz a texto (_speech-to-text_) y texto a voz (_text-to-speech_).                                                                       |
+| **MFA / verificación en dos pasos** | Además de la contraseña, un código de 6 dígitos que cambia cada 30 segundos en una aplicación del teléfono (TOTP).                     |
+| **Cookie httpOnly**                 | Cookie que el JavaScript de la página no puede leer: protege la sesión si alguien logra inyectar un script (XSS).                      |
+| **CSRF**                            | Ataque en el que otro sitio intenta hacer peticiones con tu sesión; se bloquea exigiendo una cabecera que solo la app envía.           |
+| **XSS**                             | Inyección de código en la página a través de texto de usuario; la app inserta todo texto como texto, nunca como HTML.                  |
+| **Worker / cola**                   | Proceso aparte que ejecuta tareas pendientes (avisos, indexación, purgas) guardadas en una cola de Redis.                              |
+| **Pub/sub**                         | Mecanismo de Redis para que un evento publicado llegue a todas las instancias del servidor.                                            |
+| **Service Worker**                  | Script del navegador que guarda la aplicación en caché para que cargue sin conexión.                                                   |
+| **Web Worker**                      | Hilo aparte del navegador; aquí clasifica la urgencia del texto mientras el cliente escribe.                                           |
+| **Prueba de mutación**              | Se rompe el código a propósito y se comprueba que algún test falle; demuestra que los tests protegen algo.                             |
+| **E2E**                             | Prueba de punta a punta: un navegador automatizado usa la aplicación completa como lo haría una persona.                               |
+| **Readiness (`/ready`)**            | Dirección que responde si el servidor está listo para recibir tráfico (base de datos y Redis disponibles).                             |
+| **ADR**                             | _Architecture Decision Record_: documento corto que registra una decisión técnica, sus alternativas y por qué se eligió.               |
