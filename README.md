@@ -1,7 +1,7 @@
 # Atención IA: atención al cliente con inteligencia artificial
 
 **Producción:** aplicación en <https://atencion.jonarproyectos.com> · API en
-<https://api-atencion.jonarproyectos.com> (estado: [`/ready`](https://api-atencion.jonarproyectos.com/ready)).
+`api-atencion.jonarproyectos.com` (estado: [`/ready`](https://api-atencion.jonarproyectos.com/ready)).
 
 Este README es la guía para evaluar el proyecto completo sin ayuda. El proyecto vive en tres
 repositorios; este (`atencion-ia-backend`) es el principal y tiene la guía de pruebas. Los otros dos
